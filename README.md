@@ -4,7 +4,7 @@
 
 conda create --name geodes python==3.11.11
 
-pip install numpy torch==2.6.0 torchvision torchaudio xarray diffusers==0.32.2 tqdm transformers==4.50.0 pandas matplotlib notebook accelerate==1.5.2 opencv-python==4.11.0.86 einops==0.8.1 wandb
+pip install numpy torch==2.6.0 torchvision torchaudio xarray diffusers==0.32.2 tqdm transformers==4.50.0 pandas matplotlib notebook accelerate==1.5.2 opencv-python==4.11.0.86 einops==0.8.1 wandb scipy scikit-learn
 
 ## Training code
 

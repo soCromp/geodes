@@ -14,7 +14,7 @@ def load_data(path):
     names = []
     for d in sorted(os.listdir(path)):
         if os.path.isdir(os.path.join(path, d)):
-            assert len(os.listdir(os.path.join(path, d))) == len_datapoint 
+            assert len(os.listdir(os.path.join(path, d))) == len_datapoint, f"Data point {d} in {path} does not have {len_datapoint} frames"
             names.append(d)
             point = [] 
             for i in range(len_datapoint):
@@ -24,23 +24,23 @@ def load_data(path):
 
 
 def get_fvd(train, synth, encoder=None):
-    train_nonan = np.nan_to_num(train)
-    synth_nonan = np.nan_to_num(synth)
+    train_nonan = np.nan_to_num(train)[:, 1:, ...] # skip prompt
+    synth_nonan = np.nan_to_num(synth)[:, 1:, ...] # skip prompt
     fvd, encoder = compute_fvd(train_nonan, synth_nonan, encoder=encoder)
     return fvd, encoder
 
 
 def get_kvd(train, synth, encoder=None):
-    train_nonan = np.nan_to_num(train)
-    synth_nonan = np.nan_to_num(synth)
+    train_nonan = np.nan_to_num(train)[:, 1:, ...] # skip prompt
+    synth_nonan = np.nan_to_num(synth)[:, 1:, ...] # skip prompt
     kvd, _, _, _ = compute_kvd(train_nonan, synth_nonan, encoder=encoder)
     return kvd
 
 
 def get_rmse(train, synth, batch_size=64):
     if train.ndim == 4:
-        train = np.expand_dims(train, -1)
-        synth = np.expand_dims(synth, -1)
+        train = np.expand_dims(train, -1)[:, 1:, ...] # skip prompt
+        synth = np.expand_dims(synth, -1)[:, 1:, ...] # skip prompt
     _, T, H, W, V = train.shape
     accumulator = RmseAccumulator(
         T, H, W, V,
@@ -68,6 +68,16 @@ train_match = {'names': synth['names'], 'data': np.stack(train_match_data, axis=
 
 print('train', train['data'].shape, 'synth', synth['data'].shape)
 
+print('computing FVD, KVD for equal splits of train (noise baseline)')
+split1 = random.sample(range(len(train['data'])), len(train['data'])//2)
+split2 = [i for i in range(len(train['data'])) if i not in split1]
+train1 = train['data'][split1]
+train2 = train['data'][split2]
+fvdb, encoderb = get_fvd(train1, train2)
+kvdb = get_kvd(train1, train2, encoder=encoderb)
+print('fvd', fvdb, 'kvd', kvdb)
+
+print('computing FVD, KVD for train vs synth')
 fvd, encoder = get_fvd(train['data'], synth['data'])
 kvd = get_kvd(train['data'], synth['data'], encoder=encoder)
 print('fvd', fvd, 'kvd', kvd)

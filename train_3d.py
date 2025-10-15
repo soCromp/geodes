@@ -29,9 +29,9 @@ def get_args():
     parser.add_argument('--image_size', type=int, default=32, help='the height and the width of the images')
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--eval_batch_size', type=int, default=8)
-    parser.add_argument('--num_epochs', type=int, default=250, help='if train=True, total number of epochs to train for')
+    parser.add_argument('--epochs', type=int, default=250, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
-    parser.add_argument('--learning_rate', type=float, default=1e-7)
+    parser.add_argument('--lr', type=float, default=1e-7)
     parser.add_argument('--lr_warmup_steps', type=int, default=0)
     parser.add_argument('--save_image_epochs', type=int, default=10, help='how often to sample (eval) during training')
     parser.add_argument('--save_model_epochs', type=int, default=10, help='how often to save model during training')
@@ -41,7 +41,7 @@ def get_args():
     parser.add_argument('--dataset', type=str, required=True, help='path to training data, or val data for sampling')
     parser.add_argument('--channels', type=int, default=1)
     parser.add_argument('--frames', type=int, default=8)
-    parser.add_argument('--continue', type=bool, default=False, 
+    parser.add_argument('--continue', action='store_true', 
                         help='if true and training true, attempt to resume training. uses training configs specified here')
     parser.add_argument('--img_model', type=str, 
                         default=None, help='if training video from scratch, builds from this image model')
@@ -171,7 +171,7 @@ config['data_norm_max'] = dataset.max
 def image_to_video_model(config, time_avg=True):
     # 1) load 2-D UNet and grab its config
     unet2d = diffusers.UNet2DConditionModel.from_pretrained(
-        config['img_model'], subfolder='unet', revision='main')
+        os.path.join(config['checkpoint_dir'], config['img_model']), subfolder='unet', revision='main')
     cfg = dict(unet2d.config)
     cfg['down_block_types'] = ['3D'.join(name.split('2D')) for name in cfg['down_block_types']]  
     cfg['up_block_types'] = ['3D'.join(name.split('2D')) for name in cfg['up_block_types']]  
@@ -203,7 +203,7 @@ def image_to_video_model(config, time_avg=True):
 if not config.get('continue', False) and config['train']: 
     unet = image_to_video_model(config)
     noise_scheduler = diffusers.DDPMScheduler.from_pretrained(
-        config['img_model'], subfolder='scheduler', revision='main')
+        os.path.join(config['checkpoint_dir'], config['img_model']), subfolder='scheduler', revision='main')
     start_epoch = 0
 else: # sample or resume training
     unet = diffusers.UNet3DConditionModel.from_pretrained(
@@ -219,12 +219,12 @@ cross_attention_dim = unet.config['cross_attention_dim']
 
 optimizer = torch.optim.AdamW(
     unet.parameters(),
-    lr=config['learning_rate'],
+    lr=config['lr'],
 )
 lr_scheduler = get_cosine_schedule_with_warmup(
     optimizer=optimizer,
     num_warmup_steps=config['lr_warmup_steps'],
-    num_training_steps=(len(dataloader) * config['num_epochs']),
+    num_training_steps=(len(dataloader) * config['epochs']),
 )
 
 # if args.dataset2 is not None:
@@ -339,7 +339,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     )
         
     global_step = 0
-    for epoch in range(start_epoch, config['num_epochs']):
+    for epoch in range(start_epoch, config['epochs']):
         progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
         losses = []
@@ -381,16 +381,18 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             #     break
             
         loss = np.mean(losses)
+        wandb.log({'epoch_loss': loss, 'epoch': epoch}, step=global_step)
+        progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
         with open(os.path.join(config['checkpoint_dir'], config['name'], 'train_log.txt'), 'a') as f:
             f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
             
         # sample demo images, save model
         if accelerator.is_main_process:
             pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
-            if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['num_epochs'] - 1: # IMAGE
+            if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['epochs'] - 1: # IMAGE
                 # get just the first time step/prompt frame
                 evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline)
-            if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['num_epochs'] - 1: # MODEL
+            if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['epochs'] - 1: # MODEL
                 pipeline.save_pretrained(os.path.join(config['checkpoint_dir'], config['name']))
         
         
@@ -419,7 +421,8 @@ def sample_loop(config, model, noise_scheduler, dataloader):
         
 if config['train']:
     run = wandb.init(
-        project=config['name'],
+        project='geodes',
+        name=config['name'],
         config=config,
     )
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
