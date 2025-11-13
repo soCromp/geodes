@@ -55,7 +55,12 @@ def get_args():
 args = get_args()
 config = vars(args)
 
-wandb.login()
+try:
+    with open('wandb.key', 'r') as f:
+        key = f.read().strip()
+    wandb.login(key=key)
+except:
+    wandb.login()
 
 output_dir = os.path.join(args.checkpoint_dir, args.name)
 

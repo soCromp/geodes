@@ -54,7 +54,12 @@ args = get_args()
 config = vars(args)
 config['dtype'] = torch.float32
 
-wandb.login()
+try:
+    with open('wandb.key', 'r') as f:
+        key = f.read().strip()
+    wandb.login(key=key)
+except:
+    wandb.login()
 
 
 class DummyDataset(Dataset):
@@ -280,15 +285,15 @@ class CondDiffusionPipeline(DiffusionPipeline):
         return {"images": sample.cpu()}
 
 
-def evaluate(samples, config, epoch, pipeline):
+def evaluate(samples, config, epoch, pipeline, device):
     # Sample some images from random noise (this is the backward diffusion process).
     # The default pipeline output type is `List[PIL.Image]`
     images = pipeline(
-        torch.as_tensor(samples, dtype=config['dtype'], device='cuda'),
+        torch.as_tensor(samples, dtype=config['dtype'], device=device),
         num_frames=config['frames'],
-        generator=torch.Generator(device='cuda').manual_seed(config['seed']), 
+        generator=torch.Generator(device=device).manual_seed(config['seed']), 
         encoder_hidden_states=torch.zeros((config['train_batch_size'], 1, cross_attention_dim),
-                                          device='cuda')
+                                          device=device)
         # Use a separate torch generator to avoid rewinding the random state of the main training loop
     )['images']
     
@@ -345,7 +350,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         losses = []
         
         for step, batch in enumerate(train_dataloader):
-            clean_images = torch.as_tensor(batch["pixel_values"], device='cuda', dtype=config['dtype'])
+            clean_images = torch.as_tensor(batch["pixel_values"], device=accelerator.device, dtype=config['dtype'])
             zeros = torch.zeros((config['train_batch_size'], 1, cross_attention_dim), 
                                 device=accelerator.device, dtype=config['dtype'])
             
@@ -360,7 +365,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             
             batchlosses = []
             with accelerator.accumulate(model):
-                noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros.to(clean_images.device), 
+                noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros,#.to(clean_images.device), 
                                     return_dict=False)[0]
                 loss = F.mse_loss(noise_pred[:,:,1:,:,:], noise[:,:,1:,:,:]) # skip zeroth/prompt frame
                 accelerator.backward(loss)
@@ -388,10 +393,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             
         # sample demo images, save model
         if accelerator.is_main_process:
-            pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
+            pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
+                                             scheduler=noise_scheduler)
             if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['epochs'] - 1: # IMAGE
                 # get just the first time step/prompt frame
-                evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline)
+                evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline, accelerator.device)
             if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['epochs'] - 1: # MODEL
                 pipeline.save_pretrained(os.path.join(config['checkpoint_dir'], config['name']))
         
