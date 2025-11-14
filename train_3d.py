@@ -309,7 +309,13 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     
     if accelerator.is_main_process:
         os.makedirs(os.path.join(config['checkpoint_dir'], config['name'],), exist_ok=True)
-        accelerator.init_trackers("train_example")
+        accelerator.init_trackers(
+            project_name="geodes",
+            config=config,
+            init_kwargs={"name": config["name"]}
+        )
+    else: # disable wandb in worker processes
+        wandb.init(mode="disabled")
         
     env_file_path = os.path.join(config['checkpoint_dir'], config['name'], 'environment.yml')
     subprocess.run(f"conda env export > {env_file_path}", shell=True)
@@ -405,11 +411,11 @@ def sample_loop(config, model, noise_scheduler, dataloader):
         
         
 if config['train']:
-    run = wandb.init(
-        project='geodes',
-        name=config['name'],
-        config=config,
-    )
+    # run = wandb.init(
+    #     project='geodes',
+    #     name=config['name'],
+    #     config=config,
+    # )
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
 else:
     sample_loop(config, unet, noise_scheduler, dataloader)
