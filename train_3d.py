@@ -232,13 +232,6 @@ lr_scheduler = get_cosine_schedule_with_warmup(
     num_training_steps=(len(dataloader) * config['epochs']),
 )
 
-# if args.dataset2 is not None:
-#     shared_step = torch.multiprocessing.Value('i', 0)
-#     train_dataset = MixDataset(dataset1=args.dataset, dataset2=args.dataset2, width=args.width, height=args.height,
-#                                 channels=args.channels, sample_frames=args.num_frames, 
-#                                 choicefunc=args.choice_func, max_train_steps=args.max_train_steps, shared_step=shared_step)
-# else:
-
 # generate iid (rho==0) or correlated noise
 def noisef(shape, rho=0, device=None, dtype=None, generator=None):
     # shape: (B, C, F, H, W)
@@ -278,8 +271,6 @@ class CondDiffusionPipeline(DiffusionPipeline):
             t_prev = self.scheduler.timesteps[i+1] if i+1 < len(self.scheduler.timesteps) else t
             z = torch.randn((batch_size, self.unet.config['in_channels'], config['image_size'], config['image_size']), 
                             device=device, dtype=config['dtype'], generator=generator)
-            # z = noisef((batch_size, self.unet.config.in_channels, num_frames, config['image_size'], config['image_size']),
-            #     generator=generator, device=device, dtype=dtype)[:, :, 0]
             sample[:, :, 0, :, :] = self.scheduler.add_noise(prompt, z, t_prev)
             
         return {"images": sample.cpu()}
@@ -307,15 +298,6 @@ def evaluate(samples, config, epoch, pipeline, device):
         for t in range(config['frames']):
             frame = Image.fromarray(images[i, :, t, :, :].squeeze()).convert('P')
             frame.save(os.path.join(samples_dir, f'{epoch:04d}_s{i:02d}_t{t:02d}.png'))
-    
-    # # output from model is on [-1,1]  scale; convert to [0,255]
-    # images = [Image.fromarray(255/2*(np.array(images[i]).squeeze() + 1)) for i in range(config['eval_batch_size'])]
-
-    # # Make a grid out of the images
-    # image_grid = make_image_grid(images, rows=4, cols=4)
-
-    # # Save the images
-    # image_grid.save(f"{samples_dir}/{epoch:04d}.png")
  
     
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler):
@@ -365,7 +347,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             
             batchlosses = []
             with accelerator.accumulate(model):
-                noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros,#.to(clean_images.device), 
+                noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros,
                                     return_dict=False)[0]
                 loss = F.mse_loss(noise_pred[:,:,1:,:,:], noise[:,:,1:,:,:]) # skip zeroth/prompt frame
                 accelerator.backward(loss)
@@ -382,8 +364,6 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             accelerator.log(logs, step=global_step)
             losses.append(logs['loss'])
             global_step += 1
-            # if True:
-            #     break
             
         loss = np.mean(losses)
         wandb.log({'epoch_loss': loss, 'epoch': epoch}, step=global_step)
@@ -416,7 +396,6 @@ def sample_loop(config, model, noise_scheduler, dataloader):
         )['images']
         
         # # output from model is on [-1,1]  scale; convert to [dataset min, dataset max]
-        # images = 255/2 * ( 1+np.array(images) )
         images = (images + 1)/2 * (dataset.max - dataset.min) + dataset.min
         for i, name in enumerate(batch['name']):
             os.makedirs(os.path.join(config['checkpoint_dir'], config['name'], 'samples', name), exist_ok=True)

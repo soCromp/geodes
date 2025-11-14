@@ -1,0 +1,24 @@
+compute_environment: LOCAL_MACHINE
+distributed_type: DEEPSPEED
+downcast_bf16: no
+machine_rank: 0
+num_machines: 1
+num_processes: 2
+main_process_ip: null
+main_process_port: null
+mixed_precision: bf16
+use_cpu: false
+
+deepspeed_config:
+  zero_optimization:
+    stage: 3
+    contiguous_gradients: true
+    overlap_comm: true
+    reduce_scatter: true
+    stage3_max_live_parameters: 1e9
+    stage3_max_reuse_distance: 1e9
+    stage3_prefetch_bucket_size: 5e7
+    stage3_param_persistent: true
+  bf16:
+    enabled: true
+  train_micro_batch_size_per_gpu: 1
