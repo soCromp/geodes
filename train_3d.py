@@ -35,7 +35,7 @@ def get_args():
     parser.add_argument('--lr_warmup_steps', type=int, default=0)
     parser.add_argument('--save_image_epochs', type=int, default=10, help='how often to sample (eval) during training')
     parser.add_argument('--save_model_epochs', type=int, default=10, help='how often to save model during training')
-    parser.add_argument('--name', type=str, default='debug', help='name of this run. Directory will be checkpoint_dir+name')
+    parser.add_argument('--name', type=str, default='debug3d', help='name of this run. Directory will be checkpoint_dir+name')
     parser.add_argument('--checkpoint_dir', type=str, default='/mnt/data/sonia/cyclone/checkpoints')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--dataset', type=str, required=True, help='path to training data, or val data for sampling')

@@ -9,7 +9,7 @@ pip install numpy torch==2.6.0 torchvision torchaudio xarray diffusers==0.32.2 t
 ## Training code
 
 **Image pretraining phase** (be sure to edit the config dict inside the code)<br>:
-```python pretrain.py```
+```python train_2d.py --train --epochs 1 --lr 1e-9 --dataset /mnt/data/sonia/cyclone/natlantic2/train```
 
 **Video training phase** (be sure to edit the config dict inside the code)<br>:
 ```python train_3d.py```
