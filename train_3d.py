@@ -314,19 +314,20 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             config=config,
             init_kwargs={"name": config["name"]}
         )
+        
+        env_file_path = os.path.join(config['checkpoint_dir'], config['name'], 'environment.yml')
+        subprocess.run(f"conda env export > {env_file_path}", shell=True)
+        artifact = wandb.Artifact("conda-env", type="environment")
+        artifact.add_file(env_file_path)
+        wandb.log_artifact(artifact)
+        
+        with open(os.path.join(config['checkpoint_dir'], config['name'], 'config.txt'), 'w') as f:
+            str_config = {k:str(v) for k, v in config.items()}
+            json.dump(str_config, f, indent=4)
     else: # disable wandb in worker processes
         wandb.init(mode="disabled")
         
-    env_file_path = os.path.join(config['checkpoint_dir'], config['name'], 'environment.yml')
-    subprocess.run(f"conda env export > {env_file_path}", shell=True)
-    artifact = wandb.Artifact("conda-env", type="environment")
-    artifact.add_file(env_file_path)
-    wandb.log_artifact(artifact)
-        
-    with open(os.path.join(config['checkpoint_dir'], config['name'], 'config.txt'), 'w') as f:
-        str_config = {k:str(v) for k, v in config.items()}
-        json.dump(str_config, f, indent=4)
-        
+    
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
