@@ -309,10 +309,13 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     
     if accelerator.is_main_process:
         os.makedirs(os.path.join(config['checkpoint_dir'], config['name'],), exist_ok=True)
+        run = wandb.init(
+            project = 'geodes',
+            config = config,
+            name = config['name']
+        )
         accelerator.init_trackers(
-            project_name="geodes",
-            config=config,
-            init_kwargs={"name": config["name"]}
+            init_kwargs={"wandb": {"resume": run.id}}
         )
         
         env_file_path = os.path.join(config['checkpoint_dir'], config['name'], 'environment.yml')
