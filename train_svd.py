@@ -130,6 +130,12 @@ class DummyDataset(Dataset):
         # Define the path to the folder containing video frames
         self.base_folder = dataset
         self.folders = [f for f in os.listdir(self.base_folder) if os.path.isdir(os.path.join(self.base_folder, f))]
+        self.data = []
+        for folder in self.folders:
+            storm = []
+            for i in range(sample_frames):
+                storm.append(np.load(os.path.join(self.base_folder, folder, f'{i}.npy')))
+            self.data.append(storm)
         self.num_samples = len(self.folders)
         self.channels = channels
         self.width = width
@@ -147,12 +153,12 @@ class DummyDataset(Dataset):
         Returns:
             dict: A dictionary containing the 'pixel_values' tensor of shape (16, channels, 320, 512).
         """
-        # Randomly select a folder (representing a video) from the base folder
-        chosen_folder = random.choice(self.folders)
-        folder_path = os.path.join(self.base_folder, chosen_folder)
-        frames = os.listdir(folder_path)
-        # Sort the frames by name
-        frames.sort()
+        # # Randomly select a folder (representing a video) from the base folder
+        # chosen_folder = random.choice(self.folders)
+        # folder_path = os.path.join(self.base_folder, chosen_folder)
+        frames = random.choice(self.data)
+        # # Sort the frames by name
+        # frames.sort()
 
         # Ensure the selected folder has at least `sample_frames`` frames
         if len(frames) < self.sample_frames:
@@ -167,10 +173,10 @@ class DummyDataset(Dataset):
         pixel_values = torch.empty((self.sample_frames, 3, self.height, self.width))
 
         # Load and process each frame
-        for i, frame_name in enumerate(selected_frames):
-            frame_path = os.path.join(folder_path, frame_name)
+        for i, frame in enumerate(frames):
+            # frame_path = os.path.join(folder_path, frame_name)
             # with Image.open(frame_path) as img:
-            with Image.fromarray(np.load(frame_path)) as img:
+            with Image.fromarray(frame) as img:
                 # Resize the image and convert it to a tensor
                 img_resized = img.resize((self.width, self.height))
                 img_tensor = torch.from_numpy(np.array(img_resized)).float()
@@ -397,7 +403,7 @@ def tensor_to_vae_latent(t, vae):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Script to train Stable Diffusion XL for InstructPix2Pix."
+        description="Script to train Stable Diffusion XL."
     )
     parser.add_argument(
         "--pretrained_model_name_or_path",

@@ -64,7 +64,7 @@ def compute_fvd(videos_real, videos_synth, target_T=None,
                 n_components=256, encoder=None):
     """videos should be numpy matrices (N, T, C, H, W) or (N, T, H, W).
     Can pass pre-fitted encoder"""
-    assert videos_real.ndim == videos_synth.ndim
+    assert videos_real.ndim == videos_synth.ndim, f'ndim mismatch: {videos_real.ndim} vs {videos_synth.ndim}'
     assert videos_real.ndim == 4 or videos_real.ndim == 5
     
     if encoder is None:

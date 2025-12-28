@@ -122,6 +122,8 @@ class RmseAccumulator:
 
         # squared errors
         se = (yp - yt)**2
+        
+        se = np.where(finite, se, 0.0) #from nans
 
         # overall
         se_sum = _nan_to_num((se * w).sum(dtype=np.float64))
