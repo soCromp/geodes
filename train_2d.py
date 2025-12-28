@@ -80,14 +80,39 @@ class DummyDataset(Dataset):
         self.height = height
         self.sample_frames = sample_frames
         
-        # get min, max values for normalization
-        self.min = np.inf
-        self.max = -1 * np.inf
+        # # get min, max values for normalization
+        # self.min = np.inf
+        # self.max = -1 * np.inf
+        # for folder in self.folders:
+        #     for i in range(sample_frames):
+        #         frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
+        #         self.min = min(self.min, frame.min())
+        #         self.max = max(self.max, frame.max())
+        
+        # Accumulate pixel data to find percentiles
+        sampled_pixels = []
         for folder in self.folders:
             for i in range(sample_frames):
                 frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-                self.min = min(self.min, frame.min())
-                self.max = max(self.max, frame.max())
+                
+                # Flatten to 1D array
+                flat = frame.flatten()
+                
+                # --- MEMORY SAFETY ---
+                # If your dataset is huge, you don't need every single pixel.
+                # Taking every 100th pixel is statistically sufficient for normalization.
+                # Remove '[::100]' if you have infinite RAM.
+                sampled_pixels.append(flat[::100])
+                
+        # 1. Combine into one giant array
+        all_data = np.concatenate(sampled_pixels)
+        # 2. Apply Log Transform (log(x + 1))
+        # We do this BEFORE finding percentiles so self.min/max are in "log space"
+        all_data_log = np.log1p(all_data)
+        # 3. Calculate 1st and 99th Percentiles
+        self.min = np.percentile(all_data_log, 1)
+        self.max = np.percentile(all_data_log, 99)
+        del sampled_pixels, all_data, all_data_log # free memory
                 
         if frame.ndim == 2:
             self.channels = 1
@@ -113,30 +138,35 @@ class DummyDataset(Dataset):
         frame_idx = idx % self.sample_frames
         frame_path = os.path.join(self.base_folder, self.folders[folder_idx], f'{frame_idx}.npy')
         
-        # Initialize a tensor to store the pixel values (3 channels is baked into model)
-        # pixel_values = torch.empty((self.sample_frames, 3, self.height, self.width))
+        img = np.load(frame_path)
+        img_log = np.log1p(img)
+        img_log = torch.from_numpy(img_log).float()
+        img_log[img_log.isnan()] = 0.0
+        
+        img_norm = 2.0 * (img_log - self.min) / (self.max - self.min) - 1.0
+        img_norm = torch.clamp(img_norm, -1.0, 1.0)
 
-        with Image.fromarray(np.load(frame_path)) as img:
-            # Resize the image and convert it to a tensor
-            img_resized = img.resize((self.width, self.height))
-            img_tensor = torch.from_numpy(np.array(img_resized)).float()
-            img_tensor[img_tensor.isnan()] = 0.0
-            if img_tensor.isnan().sum()>0:
-                raise ValueError(
-                    f"{img_tensor.isnan().sum()} NaN values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
-            elif img_tensor.isinf().sum()>0:
-                raise ValueError(
-                    f"Inf values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
+        # with Image.fromarray(np.load(frame_path)) as img:
+        #     # Resize the image and convert it to a tensor
+        #     img_resized = img.resize((self.width, self.height))
+        #     img_tensor = torch.from_numpy(np.array(img_resized)).float()
+        #     img_tensor[img_tensor.isnan()] = 0.0
+        #     if img_tensor.isnan().sum()>0:
+        #         raise ValueError(
+        #             f"{img_tensor.isnan().sum()} NaN values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
+        #     elif img_tensor.isinf().sum()>0:
+        #         raise ValueError(
+        #             f"Inf values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
 
-            # Normalize the image by scaling pixel values to [-1, 1]
-            # img_normalized = (img_tensor / img_tensor.max() * 2) -1.0
-            img_normalized = 2 * (img_tensor-self.min) / (self.max - self.min) - 1.0
-            img_normalized[img_normalized<-1] = -1 # in case of rounding errors
-            img_normalized[img_normalized>1] = 1
+        #     # Normalize the image by scaling pixel values to [-1, 1]
+        #     # img_normalized = (img_tensor / img_tensor.max() * 2) -1.0
+        #     img_normalized = 2 * (img_tensor-self.min) / (self.max - self.min) - 1.0
+        #     img_normalized[img_normalized<-1] = -1 # in case of rounding errors
+        #     img_normalized[img_normalized>1] = 1
 
         if self.channels == 1:
-            img_normalized = img_normalized.unsqueeze(0)
-        return {'pixel_values': img_normalized}
+            img_norm = img_norm.unsqueeze(0)
+        return {'pixel_values': img_norm}
     
 dataset = DummyDataset(dataset=config['dataset'])
 dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True)
