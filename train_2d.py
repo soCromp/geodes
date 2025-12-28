@@ -323,13 +323,14 @@ def sample_loop(config, model, noise_scheduler):
     
 
 
-noise_scheduler = diffusers.DDPMScheduler(num_train_timesteps=1000)
+noise_scheduler = diffusers.DDPMScheduler(num_train_timesteps=1000, clip_sample=False)
 
 if config['train']:
     run = wandb.init(
         project='geodes',
         name=config['name'],
         config=config,
+        group = '2d'
     )
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
 

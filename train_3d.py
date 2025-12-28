@@ -169,7 +169,10 @@ class MixDataset(Dataset):
 
 dataset = DummyDataset(dataset=config['dataset'], channels=config['channels'], sample_frames=config['frames'],
                        width=config['image_size'], height=config['image_size'])
-dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True,) # otherwise crashes on last batch
+if args.train:
+    dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True,) # otherwise crashes on last batch
+else:
+    dataloader = DataLoader(dataset, batch_size=config['eval_batch_size'], shuffle=False,) 
 config['data_norm_min'] = dataset.min 
 config['data_norm_max'] = dataset.max 
 
@@ -312,10 +315,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         run = wandb.init(
             project = 'geodes',
             config = config,
-            name = config['name']
+            name = config['name'],
+            group = '3d'
         )
         accelerator.init_trackers(
-            init_kwargs={"wandb": {"resume": run.id}}
+            'geodes',
+            init_kwargs={"wandb": {"resume": 'allow', 'id': run.id}}
         )
         
         env_file_path = os.path.join(config['checkpoint_dir'], config['name'], 'environment.yml')
@@ -398,11 +403,12 @@ def sample_loop(config, model, noise_scheduler, dataloader):
     generator = torch.Generator(device='cuda').manual_seed(config['seed'])
     for batch in tqdm(dataloader):
         prompt = batch['pixel_values'][:, :, 0, :, :]
+        prompt_batch_size = prompt.shape[0] # final batch may be smaller
         images = pipeline(
             torch.as_tensor(prompt, dtype=config['dtype'], device='cuda'),
             num_frames=config['frames'],
             generator=generator, 
-            encoder_hidden_states=torch.zeros((config['train_batch_size'], 1, cross_attention_dim), device='cuda')
+            encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda')
         )['images']
         
         # # output from model is on [-1,1]  scale; convert to [dataset min, dataset max]
