@@ -72,21 +72,47 @@ class DummyDataset(Dataset):
         """
         # Define the path to the folder containing video frames
         self.base_folder = dataset
-        self.folders = [f for f in os.listdir(self.base_folder) if os.path.isdir(os.path.join(self.base_folder, f))]
+        self.folders = [f for f in os.listdir(self.base_folder) if \
+            os.path.isdir(os.path.join(self.base_folder, f))]
         self.num_samples = len(self.folders)
         self.channels = channels
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
         
-        # get min, max values for normalization
-        self.min = np.inf
-        self.max = -1 * np.inf
+        # # get min, max values for normalization
+        # self.min = np.inf
+        # self.max = -1 * np.inf
+        # for folder in self.folders:
+        #     for i in range(sample_frames):
+        #         frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
+        #         self.min = min(self.min, frame.min())
+        #         self.max = max(self.max, frame.max())
+                
+        # Accumulate pixel data to find percentiles
+        sampled_pixels = []
         for folder in self.folders:
             for i in range(sample_frames):
                 frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-                self.min = min(self.min, frame.min())
-                self.max = max(self.max, frame.max())
+                
+                # Flatten to 1D array
+                flat = frame.flatten()
+                
+                # --- MEMORY SAFETY ---
+                # If your dataset is huge, you don't need every single pixel.
+                # Taking every 100th pixel is statistically sufficient for normalization.
+                # Remove '[::100]' if you have infinite RAM.
+                sampled_pixels.append(flat[::100])
+                
+        # 1. Combine into one giant array
+        all_data = np.concatenate(sampled_pixels)
+        # 2. Apply Log Transform (log(x + 1))
+        # We do this BEFORE finding percentiles so self.min/max are in "log space"
+        all_data_log = np.log1p(all_data)
+        # 3. Calculate 1st and 99th Percentiles
+        self.min = np.percentile(all_data_log, 1)
+        self.max = np.percentile(all_data_log, 99)
+        del sampled_pixels, all_data, all_data_log # free memory
                 
 
     def __len__(self):
@@ -103,42 +129,27 @@ class DummyDataset(Dataset):
         # Randomly select a folder (representing a video) from the base folder
         chosen_folder = self.folders[idx] # random.choice(self.folders)
         folder_path = os.path.join(self.base_folder, chosen_folder)
-        frames = sorted(os.listdir(folder_path))[:self.sample_frames]
+        frames = sorted(os.listdir(folder_path))[:self.sample_frames] #paths
+        frames = [np.load(os.path.join(folder_path, f)) for f in frames] #frame matrices
 
-        # Initialize a tensor to store the pixel values (3 channels is baked into model)
+        # Initialize a tensor to store the pixel values (1 in batch size dimension for dataloader)
         pixel_values = torch.empty((1, self.sample_frames, self.height, self.width))
 
         # Load and process each frame
-        for i, frame_name in enumerate(frames):
-            frame_path = os.path.join(folder_path, frame_name)
-            # with Image.open(frame_path) as img:
-            with Image.fromarray(np.load(frame_path)) as img:
-                # Resize the image and convert it to a tensor
-                img_resized = img.resize((self.width, self.height))
-                img_tensor = torch.from_numpy(np.array(img_resized)).float()
-                img_tensor[img_tensor.isnan()] = 0.0
-                if img_tensor.isnan().sum()>0:
-                    raise ValueError(
-                        f"{img_tensor.isnan().sum()} NaN values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
-                elif img_tensor.isinf().sum()>0:
-                    raise ValueError(
-                        f"Inf values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
+        for i, frame in enumerate(frames):
+            frame_log = np.log1p(frame)
+            img_tensor = torch.from_numpy(frame_log).float()
+            img_tensor[img_tensor.isnan()] = 0.0
+            img_norm = 2.0 * (img_tensor - self.min) / (self.max - self.min) - 1.0
+            img_norm = torch.clamp(img_norm, -1.0, 1.0)
+            
+            # Normalize the image by scaling pixel values to [-1, 1]
+            # img_normalized = 2 * (img_tensor - self.min) / (self.max - self.min) - 1
+            # img_normalized[img_normalized<-1] = -1 # in case of rounding errors
+            # img_normalized[img_normalized>1] = 1
 
-                # Normalize the image by scaling pixel values to [-1, 1]
-                img_normalized = 2 * (img_tensor - self.min) / (self.max - self.min) - 1
-                img_normalized[img_normalized<-1] = -1 # in case of rounding errors
-                img_normalized[img_normalized>1] = 1
-
-                # Rearrange channels if necessary
-                # if self.channels == 3:
-                #     img_normalized = img_normalized.permute(
-                #         2, 0, 1)  # For RGB images
-                # elif self.channels == 1:
-                #     img_normalized = img_normalized.unsqueeze(0).repeat([3,1,1])  
-                #     img_normalized = img_normalized.mean(
-                #         dim=2, keepdim=True)  # For grayscale images
-
-                pixel_values[:, i, :, :] = img_normalized
+            pixel_values[:, i, :, :] = img_norm
+            
         return {'pixel_values': pixel_values, 'name': chosen_folder}
     
 
@@ -411,8 +422,10 @@ def sample_loop(config, model, noise_scheduler, dataloader):
             encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda')
         )['images']
         
-        # # output from model is on [-1,1]  scale; convert to [dataset min, dataset max]
+        # # output from model is on [-1,1] log scale; convert to [dataset min, dataset max] nonlog
         images = (images + 1)/2 * (dataset.max - dataset.min) + dataset.min
+        images = np.expm1(images)
+        
         for i, name in enumerate(batch['name']):
             os.makedirs(os.path.join(config['checkpoint_dir'], config['name'], 'samples', name), exist_ok=True)
             for t in range(config['frames']):
@@ -426,6 +439,7 @@ if config['train']:
     #     name=config['name'],
     #     config=config,
     # )
+    print('noise scheduler config:\n', noise_scheduler.config)
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
 else:
     sample_loop(config, unet, noise_scheduler, dataloader)
