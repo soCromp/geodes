@@ -116,5 +116,6 @@ print('synth mins', synth['data'].min(axis=(1,2,3)).mean(),
 plt.hist(train['data'].max(axis=(1,2,3)), bins=30, alpha=0.5, label='real')
 plt.hist(synth['data'].max(axis=(1,2,3)), bins=30, alpha=0.5, label='synth')
 plt.legend()
+plt.title('Maximum Wind Speed In Synthetic vs Real Storms')
 plt.savefig(f'{variable}_{split}_{method}.png')
 print('histogram saved to', f'{variable}_{split}_{method}.png')
