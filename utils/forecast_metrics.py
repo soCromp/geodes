@@ -3,7 +3,8 @@ from dataclasses import dataclass
 
 # Outline:
 # - RMSE metric (stats class and accumulator object)
-# - Anomaly correlation
+# - Power Spectral Density (PSD)
+
 
 def _nan_to_num(x):
     return np.where(np.isfinite(x), x, 0.0)
@@ -157,4 +158,133 @@ class RmseAccumulator:
         return self.stats.finalize()
 
 
+# Power Spectral Density (PSD)
+@dataclass
+class PsdStats:
+    # Accumulated power per frequency bin for Pred and True
+    # Shape: (V, n_bins)
+    power_pred: np.ndarray
+    power_true: np.ndarray
+    count: int
+    
+    # The wavenumbers (x-axis for plotting)
+    k_freqs: np.ndarray
 
+    @staticmethod
+    def init(V, n_bins, k_freqs):
+        z = np.zeros
+        return PsdStats(
+            power_pred=z((V, n_bins), dtype=np.float64),
+            power_true=z((V, n_bins), dtype=np.float64),
+            count=0,
+            k_freqs=k_freqs
+        )
+
+    def finalize(self):
+        # Average over batch/time samples
+        # resulting shape: (V, n_bins)
+        avg_pred = self.power_pred / max(self.count, 1)
+        avg_true = self.power_true / max(self.count, 1)
+        
+        return dict(
+            k_wavenumbers=self.k_freqs,
+            psd_pred=avg_pred,
+            psd_true=avg_true,
+        )
+
+class PsdAccumulator:
+    """
+    Streaming Power Spectral Density (1D Azimuthal Average).
+    Computes the energy at different spatial scales.
+    
+    y_pred, y_true : (B, T, H, W, V)
+    """
+    def __init__(self, H, W, V):
+        self.H, self.W, self.V = H, W, V
+        
+        # --- Pre-compute Radial Wavenumber Bins ---
+        # 1. Get frequencies corresponding to FFT
+        ky = np.fft.fftfreq(H)
+        kx = np.fft.fftfreq(W)
+        
+        # 2. Create 2D grid of radial frequencies (k = sqrt(kx^2 + ky^2))
+        k_grid_x, k_grid_y = np.meshgrid(kx, ky)
+        k_radial = np.sqrt(k_grid_x**2 + k_grid_y**2)
+        
+        # 3. Flatten and sort to create bins
+        # We bin pixels based on their distance from the DC component (0,0)
+        self.k_flat = k_radial.flatten()
+        
+        # Quantize k into integer bins for accumulation
+        # We scale up so bins are distinct enough, or just use unique values
+        # A simple robust way is to use indices of unique values
+        k_unique, self.bin_indices = np.unique(self.k_flat, return_inverse=True)
+        self.n_bins = len(k_unique)
+        self.k_vals = k_unique
+        
+        self.stats = PsdStats.init(V, self.n_bins, self.k_vals)
+
+    def _compute_1d_spectrum(self, img_batch):
+        """
+        Input: (N, H, W, V) where N = B*T
+        Output: (V, n_bins) accumulated power spectrum
+        """
+        N, H, W, V = img_batch.shape
+        
+        # 1. 2D FFT over H and W axes
+        # Result is complex64/128
+        fft_out = np.fft.fft2(img_batch, axes=(1, 2))
+        
+        # 2. Power Spectrum (Amplitude squared)
+        # Normalization: / (H*W)**2 is standard for physical consistency,
+        # but for relative comparison (sharp vs blur), raw magnitude is fine.
+        # We will normalize by pixel count to keep numbers sane.
+        power_2d = (np.abs(fft_out) ** 2) / (H * W)
+        
+        # 3. Azimuthal Average (Summing rings)
+        # Reshape to (N, H*W, V) to match flattened bin indices
+        power_flat = power_2d.reshape(N, H * W, V)
+        
+        # We need to sum over the spatial pixels (H*W) based on bin_indices
+        # Output shape should be (V, n_bins)
+        # Since np.bincount is 1D, we loop over V (usually small) or use add.at
+        
+        accum_power = np.zeros((V, self.n_bins), dtype=np.float64)
+        
+        for v in range(V):
+            # Average over the batch dim (N) first to save memory/loops
+            # (H*W,) mean power for this variable
+            mean_power_v = power_flat[:, :, v].mean(axis=0) 
+            
+            # Sum into radial bins
+            # bincount sums weights (power) for each bin index
+            accum_power[v] = np.bincount(self.bin_indices, weights=mean_power_v, minlength=self.n_bins)
+            
+        return accum_power
+
+    def update(self, y_pred, y_true):
+        # Flatten B and T into a single batch dimension
+        B, T, H, W, V = y_true.shape
+        
+        # Reshape to (N, H, W, V)
+        yp = y_pred.reshape(-1, H, W, V)
+        yt = y_true.reshape(-1, H, W, V)
+        
+        # Handle NaNs: FFT cannot handle NaNs. 
+        # Simple strategy: replace with 0.0 (or mean). 
+        # If your data has land masks (NaNs), this might introduce artifacts, 
+        # but it's better than crashing.
+        yp = np.nan_to_num(yp, nan=0.0)
+        yt = np.nan_to_num(yt, nan=0.0)
+
+        # Compute spectra
+        spec_p = self._compute_1d_spectrum(yp)
+        spec_t = self._compute_1d_spectrum(yt)
+        
+        # Accumulate
+        self.stats.power_pred += spec_p
+        self.stats.power_true += spec_t
+        self.stats.count += 1
+
+    def results(self):
+        return self.stats.finalize()

@@ -17,32 +17,39 @@ trackspath1='/home/sonia/mcms/tracker/1940-2010/era5/out_era5/era5/mcms_era5_194
 trackspath2='/home/sonia/mcms/tracker/2010-2024/era5/out_era5/era5/FIXEDmcms_era5_2010_2024_tracks.txt'
 joinyear = 2010 # overlap for the track data
 
-use_slp = False # whether to include slp channel
-use_windmag = True #include wind magnitude channel # NOTE THIS IS 500hPa
-use_winduv = False # include wind u and v components channels # NOTE THIS IS 500hPa
+# when multiple variables are used, they will be included in the same order as this list:
+use_slp = True # whether to include slp channel
+use_windmag = False #include wind magnitude channel # NOTE THIS IS 500hPa
+use_winduv = True # include wind u and v components channels # NOTE THIS IS 500hPa
+use_temperature = True # temperature at 925hPa 
+use_humidity = True # specific humidity at 500hPa
 use_topo = False # include topography channel
 skip_preexisting = False # skip existing datapoints (ensures they have 8 frames)
 threads = 1
 grid = 0.25
 
-readme = """32x32 for 1600x1600km^2 500hpa windmag, 8 frames long, over [1940,2024] in spacific"""
-
 # atlantic ocean is regmask['reg_name'].values[109] # so 110 in regmaskoc values
 # atlantic: 110
 # pacific: 111
-reg_id = 111
-hemi = 's' # n or s
+reg_id = 110
+hemi = 'n' # n or s
 
 if reg_id == 110:
     basin = hemi + 'atlantic'
 elif reg_id == 111:
     basin = hemi + 'pacific'
 
-outpath = f'/home/cyclone/train/windmag/500hpa/{grid}/{basin}'
+outpath = f'/home/cyclone/train/multivar/{grid}/{basin}'
+readme = f"""32x32 grids represent 1600x1600km^2 area for (in order): 
+- SLP (hPa)
+- 500hpa wind U (m/s)
+- 500hpa wind V (m/s)
+- 925hpa temperature (K)
+- 500hpa specific humidity  (kg/kg)
+Time is 8 frames long, over [1940,2024] in {basin}"""
 ###### 
 print(outpath)
 regmask = xr.open_dataset('/home/cyclone/regmask_0723_anl.nc')
-
 
 
 ####### make dataframe of all tracks 
@@ -75,6 +82,8 @@ tracks = tracks[['year', 'month', 'day', 'hour', 'tid', 'sid', 'lat', 'lon']]
 varnames = [] # list of variables that will be included in this output dataset
 varlocs = {'slp': f'/mnt/data/sonia/cyclone/{grid}/slp', #'wind10m': '/home/cyclone/wind',
            'wind': f'/mnt/data/sonia/cyclone/{grid}/wind_500hpa',
+           'temperature': f'/mnt/data/sonia/cyclone/{grid}/temperature',
+           'humidity': f'/mnt/data/sonia/cyclone/{grid}/humidity',
            'topo': f'/mnt/data/sonia/cyclone/{grid}/slp/topo.nc'} # where the source data is stored 
 varfuncs = {}
 if use_slp:
@@ -96,13 +105,25 @@ if use_winduv:
         data = ds.sel(lat=lats, lon=lons, time=time)[['u', 'v']] # for 10m: [['u10', 'v10']] 
         return data
     varfuncs['wind'] = f_winduv
+if use_temperature:
+    varnames.append('temperature')
+    def f_temperature(ds, lats, lons, time):
+        data = ds.sel(lat=lats, lon=lons, time=time, pressure_level=925)['t']
+        return data
+    varfuncs['temperature'] = f_temperature
+if use_humidity:
+    varnames.append('humidity')
+    def f_humidity(ds, lats, lons, time):
+        data = ds.sel(lat=lats, lon=lons, time=time, pressure_level=500)['q']
+        return data 
+    varfuncs['humidity'] = f_humidity
 topo = None
 if use_topo: 
     varnames.append('topo')
     topo = xr.open_dataset(varlocs['topo'], engine='netcdf4')
     def f_topo(ds, lats, lons, time):
         return ds.sel(lat=lats, lon=lons)['lsm']
-varnames, varfuncs
+print(varnames)
 
 resolution = 0.5 # resolution of data in degs
 l = 800 # (half length: l/2 km from center in each direction)
@@ -171,7 +192,7 @@ def prep_point(df, thread=0):
         for data in rawslices:
             lats = data.lat.values 
             lons = data.lon.values
-            if data.shape[0] > 1: # for instance, wind u and v components (data.shape[0] or data.to_array().shape[0] ??)
+            if type(data) == xr.Dataset: # for instance, wind u and v components (data.shape[0] or data.to_array().shape[0] ??)
                 data = data.to_array().squeeze().values
                 for i in range(data.shape[0]):
                     sel = data[i]
