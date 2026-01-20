@@ -32,7 +32,10 @@ grid = 0.25
 # atlantic: 110
 # pacific: 111
 reg_id = 110
-hemi = 'n' # n or s
+hemi = 's' # n or s
+
+start_year = 1940 #inclusive
+stop_year = 2024 #inclusive
 
 if reg_id == 110:
     basin = hemi + 'atlantic'
@@ -70,6 +73,7 @@ sids2 = tracks2[(tracks2['sid']==tracks2['tid']) & \
 tracks2 = tracks2[tracks2['sid'].isin(sids2)]
 
 tracks = pd.concat([tracks1, tracks2], ignore_index=True)
+tracks = tracks[tracks['year']>=start_year]
 tracks = tracks.sort_values(by=['year', 'month', 'day', 'hour'])
 
 # conversions from the MCMS lat/lon system, as described in Jimmy's email:
@@ -132,7 +136,7 @@ x_lin = np.linspace(-l, l, s)
 y_lin = np.linspace(-l, l, s)
 x_grid, y_grid = np.meshgrid(x_lin, y_lin) # equal-spaced points from -l to l in both x and y dimensions
 
-file_year = 1940
+file_year = start_year
 end_year = 2024
 cur_datas = {}
 next_datas = {}
@@ -246,6 +250,9 @@ def worker(sids_chunk, thread_id):
             continue
         start_lat = sid_df['lat'].iloc[0]
         start_lon = sid_df['lon'].iloc[0]
+        
+        if sid_df['year'].iloc[-1] > stop_year:
+            return
 
         if skip_preexisting and os.path.exists(f'{outpath}/{sid}') and len(os.listdir(f'{outpath}/{sid}')) == 8:
             continue # skip completed datapoints
