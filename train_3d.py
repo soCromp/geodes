@@ -22,14 +22,16 @@ import math
 import wandb 
 import argparse
 import subprocess
+from utils.dataset import VideoDataset
+
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train', action="store_true")
+    parser.add_argument('--train', '-t', action="store_true")
     parser.add_argument('--image_size', type=int, default=32, help='the height and the width of the images')
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--eval_batch_size', type=int, default=8)
-    parser.add_argument('--epochs', type=int, default=250, help='if train=True, total number of epochs to train for')
+    parser.add_argument('--epochs', '-e', type=int, default=250, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
     parser.add_argument('--lr', type=float, default=1e-7)
     parser.add_argument('--lr_warmup_steps', type=int, default=0)
@@ -38,7 +40,7 @@ def get_args():
     parser.add_argument('--name', type=str, default='debug3d', help='name of this run. Directory will be checkpoint_dir+name')
     parser.add_argument('--checkpoint_dir', type=str, default='/mnt/data/sonia/cyclone/checkpoints')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--dataset', type=str, required=True, help='path to training data, or val data for sampling')
+    parser.add_argument('--dataset', '-d', type=str, required=True, help='path to training data, or val data for sampling')
     parser.add_argument('--channels', type=int, default=1)
     parser.add_argument('--frames', type=int, default=8)
     parser.add_argument('--continue', action='store_true', 
@@ -62,130 +64,12 @@ except:
     wandb.login()
 
 
-class DummyDataset(Dataset):
-    def __init__(self, dataset, 
-                 width=1024, height=576, channels=3, sample_frames=25):
-        """
-        Args:
-            num_samples (int): Number of samples in the dataset.
-            channels (int): Number of channels, default is 3 for RGB.
-        """
-        # Define the path to the folder containing video frames
-        self.base_folder = dataset
-        self.folders = [f for f in os.listdir(self.base_folder) if \
-            os.path.isdir(os.path.join(self.base_folder, f))]
-        self.num_samples = len(self.folders)
-        self.channels = channels
-        self.width = width
-        self.height = height
-        self.sample_frames = sample_frames
-        
-        # # get min, max values for normalization
-        # self.min = np.inf
-        # self.max = -1 * np.inf
-        # for folder in self.folders:
-        #     for i in range(sample_frames):
-        #         frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-        #         self.min = min(self.min, frame.min())
-        #         self.max = max(self.max, frame.max())
-                
-        # Accumulate pixel data to find percentiles
-        sampled_pixels = []
-        for folder in self.folders:
-            for i in range(sample_frames):
-                frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-                
-                # Flatten to 1D array
-                flat = frame.flatten()
-                
-                # --- MEMORY SAFETY ---
-                # If your dataset is huge, you don't need every single pixel.
-                # Taking every 100th pixel is statistically sufficient for normalization.
-                # Remove '[::100]' if you have infinite RAM.
-                sampled_pixels.append(flat[::100])
-                
-        # 1. Combine into one giant array
-        all_data = np.concatenate(sampled_pixels)
-        # 2. Apply Log Transform (log(x + 1))
-        # We do this BEFORE finding percentiles so self.min/max are in "log space"
-        all_data_log = np.log1p(all_data)
-        # 3. Calculate 1st and 99th Percentiles
-        self.min = np.percentile(all_data_log, 1)
-        self.max = np.percentile(all_data_log, 99)
-        del sampled_pixels, all_data, all_data_log # free memory
-                
-
-    def __len__(self):
-        return self.num_samples
-
-    def __getitem__(self, idx):
-        """
-        Args:
-            idx (int): Index of the sample to return.
-
-        Returns:
-            dict: A dictionary containing the 'pixel_values' tensor of shape (16, channels, 320, 512).
-        """
-        # Randomly select a folder (representing a video) from the base folder
-        chosen_folder = self.folders[idx] # random.choice(self.folders)
-        folder_path = os.path.join(self.base_folder, chosen_folder)
-        frames = sorted(os.listdir(folder_path))[:self.sample_frames] #paths
-        frames = [np.load(os.path.join(folder_path, f)) for f in frames] #frame matrices
-
-        # Initialize a tensor to store the pixel values (1 in batch size dimension for dataloader)
-        pixel_values = torch.empty((1, self.sample_frames, self.height, self.width))
-
-        # Load and process each frame
-        for i, frame in enumerate(frames):
-            frame_log = np.log1p(frame)
-            img_tensor = torch.from_numpy(frame_log).float()
-            img_tensor[img_tensor.isnan()] = 0.0
-            img_norm = 2.0 * (img_tensor - self.min) / (self.max - self.min) - 1.0
-            img_norm = torch.clamp(img_norm, -1.0, 1.0)
-            
-            # Normalize the image by scaling pixel values to [-1, 1]
-            # img_normalized = 2 * (img_tensor - self.min) / (self.max - self.min) - 1
-            # img_normalized[img_normalized<-1] = -1 # in case of rounding errors
-            # img_normalized[img_normalized>1] = 1
-
-            pixel_values[:, i, :, :] = img_norm
-            
-        return {'pixel_values': pixel_values, 'name': chosen_folder}
-    
-
-class MixDataset(Dataset):
-    def __init__(self, dataset1, dataset2, width=32, height=32, channels=1, sample_frames=8, shared_step=None, choicefunc='uniform'):
-        self.dataset1 = DummyDataset(dataset1, width=width, height=height, channels=channels, sample_frames=sample_frames)
-        self.dataset2 = DummyDataset(dataset2, width=width, height=height, channels=channels, sample_frames=sample_frames)
-        
-        self.min = min(self.dataset1.min, self.dataset2.min)
-        self.max = max(self.dataset1.max, self.dataset2.max)
-        
-        self._shared_step = shared_step
-        if shared_step is None:
-            self._shared_step = mp.Value('i', 0)  # 'i' == signed int
-        if choicefunc == 'uniform':
-            self.choicefunc = lambda f: np.random.choice([0,1])
-        elif choicefunc == 'linear':
-            self.choicefunc = lambda f: np.random.choice([0, 1], p=[f, 1-f])
-            
-        
-    def __len__(self):
-        return len(self.dataset1) + len(self.dataset2)
-    
-    
-    def __getitem__(self, idx):
-        pass
-
-
-dataset = DummyDataset(dataset=config['dataset'], channels=config['channels'], sample_frames=config['frames'],
+dataset = VideoDataset(dataset=config['dataset'], channels=config['channels'], sample_frames=config['frames'],
                        width=config['image_size'], height=config['image_size'])
 if args.train:
     dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True,) # otherwise crashes on last batch
 else:
     dataloader = DataLoader(dataset, batch_size=config['eval_batch_size'], shuffle=False,) 
-config['data_norm_min'] = dataset.min 
-config['data_norm_max'] = dataset.max 
 
 def image_to_video_model(config, time_avg=True):
     # 1) load 2-D UNet and grab its config

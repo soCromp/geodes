@@ -5,7 +5,7 @@ from diffusers.utils import make_image_grid
 from diffusers import DDPMPipeline, DiffusionPipeline
 import numpy as np 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader
 import torch.nn.functional as F
 import os
 from PIL import Image, ImageDraw
@@ -18,21 +18,23 @@ import wandb
 import argparse 
 import subprocess
 import math
+from utils.dataset import ImageDataset
 
 
+# used for argparsing lists
 def comma_separated_ints(value):
     return [int(x) for x in value.split(",")]
 
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--train', action='store_true')
+    parser.add_argument('--train', '-t', action='store_true')
     parser.add_argument('--image_size', type=int, default=32, help='the height and the width of the images')
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--eval_batch_size', type=int, default=8)
-    parser.add_argument('--epochs', type=int, default=250, help='if train=True, total number of epochs to train for')
+    parser.add_argument('--epochs', '-e', type=int, default=250, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
-    parser.add_argument('--lr', type=float, default=1e-7)
+    parser.add_argument('--lr', '-lr', type=float, default=1e-7)
     parser.add_argument('--lr_warmup_steps', type=int, default=0)
     parser.add_argument('--save_image_epochs', type=int, default=10, help='how often to sample (eval) during training')
     parser.add_argument('--save_model_epochs', type=int, default=10, help='how often to save model during training')
@@ -40,7 +42,7 @@ def get_args():
                         help='name of this run. Directory will be checkpoint_dir+name and wandb will use this name')
     parser.add_argument('--checkpoint_dir', type=str, default='/hdd3/sonia/cycloneSVD/checkpoints')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--dataset', type=str, required=True, help='path to training data, or val data for sampling')
+    parser.add_argument('--dataset', '-d', type=str, required=True, help='path to training data, or val data for sampling')
     parser.add_argument('--continue', type=bool, default=False, 
                         help='if true and training true, attempt to resume training. uses training configs specified here')
     parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
@@ -64,111 +66,8 @@ except:
 
 output_dir = os.path.join(args.checkpoint_dir, args.name)
 
-
-class DummyDataset(Dataset):
-    def __init__(self, dataset, width=32, height=32, sample_frames=8):
-        """
-        Args:
-            num_samples (int): Number of samples in the dataset.
-            channels (int): Number of channels, default is 3 for RGB.
-        """
-        # Define the path to the folder containing video frames
-        self.base_folder = dataset
-        self.folders = [f for f in os.listdir(self.base_folder) if os.path.isdir(os.path.join(self.base_folder, f))]
-        self.num_samples = len(self.folders)
-        self.width = width
-        self.height = height
-        self.sample_frames = sample_frames
-        
-        # # get min, max values for normalization
-        # self.min = np.inf
-        # self.max = -1 * np.inf
-        # for folder in self.folders:
-        #     for i in range(sample_frames):
-        #         frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-        #         self.min = min(self.min, frame.min())
-        #         self.max = max(self.max, frame.max())
-        
-        # Accumulate pixel data to find percentiles
-        sampled_pixels = []
-        for folder in self.folders:
-            for i in range(sample_frames):
-                frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-                
-                # Flatten to 1D array
-                flat = frame.flatten()
-                
-                # --- MEMORY SAFETY ---
-                # If your dataset is huge, you don't need every single pixel.
-                # Taking every 100th pixel is statistically sufficient for normalization.
-                # Remove '[::100]' if you have infinite RAM.
-                sampled_pixels.append(flat[::100])
-                
-        # 1. Combine into one giant array
-        all_data = np.concatenate(sampled_pixels)
-        # 2. Apply Log Transform (log(x + 1))
-        # We do this BEFORE finding percentiles so self.min/max are in "log space"
-        all_data_log = np.log1p(all_data)
-        # 3. Calculate 1st and 99th Percentiles
-        self.min = np.percentile(all_data_log, 1)
-        self.max = np.percentile(all_data_log, 99)
-        del sampled_pixels, all_data, all_data_log # free memory
-                
-        if frame.ndim == 2:
-            self.channels = 1
-        elif frame.ndim == 3:
-            self.channels = frame.shape[2]
-        else:
-            raise ValueError(f'Frame has invalid number of dimensions, should be 2 or 3 but is {frame.ndim}')
-                
-
-    def __len__(self):
-        return self.sample_frames * len(self.folders)
-
-    def __getitem__(self, idx):
-        """
-        Args:
-            idx (int): Index of the sample to return.
-
-        Returns:
-            dict: A dictionary containing the 'pixel_values' tensor of shape (16, channels, 320, 512).
-        """
-        # Randomly select a folder (representing a video) from the base folder
-        folder_idx = idx // self.sample_frames
-        frame_idx = idx % self.sample_frames
-        frame_path = os.path.join(self.base_folder, self.folders[folder_idx], f'{frame_idx}.npy')
-        
-        img = np.load(frame_path)
-        img_log = np.log1p(img)
-        img_log = torch.from_numpy(img_log).float()
-        img_log[img_log.isnan()] = 0.0
-        
-        img_norm = 2.0 * (img_log - self.min) / (self.max - self.min) - 1.0
-        img_norm = torch.clamp(img_norm, -1.0, 1.0)
-
-        # with Image.fromarray(np.load(frame_path)) as img:
-        #     # Resize the image and convert it to a tensor
-        #     img_resized = img.resize((self.width, self.height))
-        #     img_tensor = torch.from_numpy(np.array(img_resized)).float()
-        #     img_tensor[img_tensor.isnan()] = 0.0
-        #     if img_tensor.isnan().sum()>0:
-        #         raise ValueError(
-        #             f"{img_tensor.isnan().sum()} NaN values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
-        #     elif img_tensor.isinf().sum()>0:
-        #         raise ValueError(
-        #             f"Inf values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
-
-        #     # Normalize the image by scaling pixel values to [-1, 1]
-        #     # img_normalized = (img_tensor / img_tensor.max() * 2) -1.0
-        #     img_normalized = 2 * (img_tensor-self.min) / (self.max - self.min) - 1.0
-        #     img_normalized[img_normalized<-1] = -1 # in case of rounding errors
-        #     img_normalized[img_normalized>1] = 1
-
-        if self.channels == 1:
-            img_norm = img_norm.unsqueeze(0)
-        return {'pixel_values': img_norm}
     
-dataset = DummyDataset(dataset=config['dataset'])
+dataset = ImageDataset(dataset=config['dataset'])
 dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True)
 
 
@@ -196,7 +95,7 @@ else: # resume
     with open(os.path.join(output_dir, 'train_log.txt'), 'r') as f:
         logs = f.readlines()
     last_epoch = int(logs[-1].split()[1][:-1])
-print(unet)
+# print(unet)
 
 
 optimizer = torch.optim.AdamW(unet.parameters(), lr=config['lr'])
@@ -230,28 +129,27 @@ class CondDiffusionPipeline(DiffusionPipeline):
         return {"images": sample.cpu()}
         
 
-
 def evaluate(config, epoch, pipeline):
     # Sample some images from random noise (this is the backward diffusion process).
-    # The default pipeline output type is `List[PIL.Image]`
     images = pipeline(
         batch_size=config['eval_batch_size'],
         generator=torch.Generator(device='cuda').manual_seed(config['seed']), 
         encoder_hidden_states=zeros.to('cuda'),
         # Use a separate torch generator to avoid rewinding the random state of the main training loop
     )['images']
-    # print(images.shape, np.array(images[0]).squeeze().shape)
     
-    # output from model is on [-1,1]  scale; convert to [0,255] for visualization
-    images = [Image.fromarray(255/2*(np.array(images[i]).squeeze() + 1)) for i in range(config['eval_batch_size'])]
-
-    # Make a grid out of the images
-    image_grid = make_image_grid(images, rows=1, cols=config['eval_batch_size'])
-
-    # Save the images
-    test_dir = os.path.join(output_dir, "train_samples")
+    test_dir = os.path.join(output_dir, "train_samples", str(epoch))
     os.makedirs(test_dir, exist_ok=True)
-    image_grid.save(f"{test_dir}/{epoch:04d}.png")
+    
+    for i in range(config['eval_batch_size']):
+        # output from model is *tensor* [channels, height, width]
+        # on [-1,1]  scale; we will convert to [0,255] for visualization
+        channel_frames = [np.asarray(images[i][c]) for c in range(dataset.channels)]
+        channel_frames = [Image.fromarray(255/2*(frame+1)) for frame in channel_frames]
+
+        # Make a grid out of the images
+        image_grid = make_image_grid(channel_frames, rows=1, cols=len(channel_frames))
+        image_grid.save(f"{test_dir}/{i}.png")
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler):
