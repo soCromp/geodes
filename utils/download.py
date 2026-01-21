@@ -7,7 +7,7 @@ import numpy as np
 import zipfile
 import os
 
-grid='0.5' #0.5 works 0.25 OOM
+grid='0.25' #0.5 works 0.25 OOM
 client = cdsapi.Client()
 
 # # topo
