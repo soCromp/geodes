@@ -64,7 +64,7 @@ except:
     wandb.login()
 
 
-dataset = VideoDataset(dataset=config['dataset'], channels=config['channels'], sample_frames=config['frames'],
+dataset = VideoDataset(dataset=config['dataset'], sample_frames=config['frames'],
                        width=config['image_size'], height=config['image_size'])
 if args.train:
     dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True,) # otherwise crashes on last batch
@@ -84,7 +84,7 @@ def image_to_video_model(config, time_avg=True):
     unet3d  = UNet3DConditionModel.from_config(cfg)
     print('Video model config', unet3d.config)
 
-    # 3) copy 2-D weights → 3-D
+    # 3) copy 2-D weights -> 3-D
     sd2 = unet2d.state_dict()
     sd3 = unet3d.state_dict()
     for k, w in sd2.items():
@@ -255,7 +255,6 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             )
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
             
-            batchlosses = []
             with accelerator.accumulate(model):
                 noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros,
                                     return_dict=False)[0]
