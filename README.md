@@ -48,3 +48,7 @@ CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes <num_GPUs> train_3d.p
 ## Attributions
 
 - SVD code is from https://github.com/wangqiang9/SVD_Xtend/
+
+## Contact
+
+Please reach out to Sonia Cromp ([cromp@wisc.edu](mailto:cromp@wisc.edu), [socromp.github.io](socromp.github.io))
