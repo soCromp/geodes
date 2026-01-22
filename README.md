@@ -37,7 +37,7 @@ Single-GPU:
 ```shell
 python train_3d.py --train --epochs 1 --lr 1e-9 --dataset <dataset> --img_model debug2d
 ```
-Multi-GPU
+Multi-GPU:
 ```shell 
 CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes <num_GPUs> train_3d.py --train --epochs 1 --lr 1e-9 --dataset <dataset> --img_model debug2d
 ```
@@ -51,4 +51,4 @@ CUDA_VISIBLE_DEVICES=0,1 accelerate launch --num_processes <num_GPUs> train_3d.p
 
 ## Contact
 
-Please reach out to Sonia Cromp ([cromp@wisc.edu](mailto:cromp@wisc.edu), [socromp.github.io](socromp.github.io))
+Please reach out to Sonia Cromp ([cromp@wisc.edu](mailto:cromp@wisc.edu), [socromp.github.io](socromp.github.io)) with any questions or comments (or postdoc opportunities :))!
