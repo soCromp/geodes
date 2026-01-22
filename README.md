@@ -6,7 +6,7 @@ Welcome to GeoDES! This project uses [Denoising Diffusion Probabilistic Models (
 
 **Project goals:**
 - *Escape the "Mean State":* Demonstrate that generative models can produce sharp, realistic weather features rather than blurred averages.
-- *Tail Convergence:* accurately reproduce the statistical distribution of wind speeds, especially at the extreme tail (high-impact storms).
+- *Tail Convergence:* Accurately reproduce the statistical distribution of wind speeds, especially at the extreme tail (high-impact storms).
 - *Physical Consistency:* Ensure that generated variables (Wind, Pressure, Humidity) maintain realistic correlations.
 
 **Current status:**
@@ -19,18 +19,20 @@ Welcome to GeoDES! This project uses [Denoising Diffusion Probabilistic Models (
 
 ## Installation
 
+```shell
 conda create --name geodes python==3.11.11
 
 pip install numpy torch==2.6.0 torchvision torchaudio xarray diffusers==0.32.2 tqdm transformers==4.50.0 pandas matplotlib notebook accelerate==1.5.2 opencv-python==4.11.0.86 einops==0.8.1 wandb scipy scikit-learn
+```
 
 ## Training code
 
-**Image pretraining phase**<br>:
+**Image pretraining phase:**<br>
 ```shell
 python train_2d.py --train --epochs 1 --lr 1e-9 --dataset /mnt/data/sonia/cyclone/natlantic2/train --name debug2d
 ```
 
-**Video training phase**<br>:
+**Video training phase:**<br>
 Single-GPU:
 ```shell
 python train_3d.py --train --epochs 1 --lr 1e-9 --dataset <dataset> --img_model debug2d
