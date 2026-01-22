@@ -58,4 +58,4 @@ accelerate launch train_svd.py --dataset <dataset>  --output_dir <output_dir> \
 
 ## Contact
 
-Please reach out to Sonia Cromp ([cromp@wisc.edu](mailto:cromp@wisc.edu), [socromp.github.io](socromp.github.io)) with any questions or comments (or postdoc opportunities :))!
+Please reach out to Sonia Cromp ([cromp@wisc.edu](mailto:cromp@wisc.edu), [socromp.github.io](https://socromp.github.io)) with any questions or comments (or postdoc opportunities :))!
