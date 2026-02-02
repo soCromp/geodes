@@ -167,8 +167,11 @@ class CondDiffusionPipeline(DiffusionPipeline):
             eps = self.unet(sample, t, encoder_hidden_states=encoder_hidden_states).sample
             sample = self.scheduler.step(eps, t, sample, generator=generator).prev_sample
             t_prev = self.scheduler.timesteps[i+1] if i+1 < len(self.scheduler.timesteps) else t
-            z = torch.randn((batch_size, self.unet.config['in_channels'], config['image_size'], config['image_size']), 
-                            device=device, dtype=config['dtype'], generator=generator)
+            # z = torch.randn((batch_size, self.unet.config['in_channels'], config['image_size'], config['image_size']), 
+            #                 device=device, dtype=config['dtype'], generator=generator)
+            
+            # put the prompt back in
+            z = noise[:, :, 0, :, :]
             sample[:, :, 0, :, :] = self.scheduler.add_noise(prompt, z, t_prev)
             
         return {"images": sample.cpu()}

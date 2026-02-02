@@ -4,7 +4,9 @@ import sys
 from utils.video_metrics import compute_fvd, compute_kvd
 from utils.forecast_metrics import RmseAccumulator, PsdAccumulator
 import random
+
 from matplotlib import pyplot as plt
+plt.rcParams.update({'font.size': 15})
 
 train_path = sys.argv[1] 
 synth_path = sys.argv[2]
@@ -23,6 +25,12 @@ elif 'climax' in synth_path:
     method = 'climax'
 elif 'clima' in synth_path:
     method = 'climatology'
+elif 'codicast' in synth_path:
+    method = 'CoDiCast'
+elif 'cont' in synth_path:
+    method = 'CEF'
+elif 'test' in synth_path:
+    method = 'Test'
     
 print(f'***Detected {method} method, variable(s) {variable} and {split} split***')
 
@@ -85,12 +93,12 @@ def mins_maxes(train, synth): # good as a sanity check
 
 
 def maxes_histogram(train, synth, ):
-    plt.hist(train.max(axis=(1,2,3)), bins=30, alpha=0.5, label='Real')
-    plt.hist(synth.max(axis=(1,2,3)), bins=30, alpha=0.5, label=f'Synth ({method.title()})')
+    plt.hist(train.max(axis=(1,2,3)), density=True,bins=30, alpha=0.5, label='Real')
+    plt.hist(synth.max(axis=(1,2,3)), density=True,bins=30, alpha=0.5, label=f'Synth ({method.title()})')
     plt.legend()
     plt.title(f'Maximum Wind Speed In {method.title()} Synthetic vs Real Storms')
-    plt.savefig(f'{variable}_{split}_{method}.png')
-    print('histogram saved to', f'{variable}_{split}_{method}.png')
+    plt.savefig(f'{variable}_{split}_{method}.pdf')
+    print('histogram saved to', f'{variable}_{split}_{method}.pdf')
 
 
 def get_psd(train, synth, batch_size=64):
@@ -126,7 +134,6 @@ def get_psd(train, synth, batch_size=64):
 
 
 def qq_plot(train, synth):
-    print(synth)
     train_maxes = train.max(axis=(1,2,3,))
     train_maxes = train_maxes[train_maxes < 150] # remove crazy outliers (may need to change for other variables)
     synth = np.nan_to_num(synth, 0.0)
@@ -159,12 +166,6 @@ train = load_data(train_path)
 synth = load_data(synth_path)
 # synth['data'] = np.expm1(synth['data'])
 
-train_match_data = []
-for name in synth['names']:
-    assert name in train['names'], f"{name} not in training set"
-    train_match_data.append(train['data'][train['names'].index(name)])
-train_match = {'names': synth['names'], 'data': np.stack(train_match_data, axis=0)}
-
 print('train', train['data'].shape, 'synth', synth['data'].shape)
 
 ####### Noise baseline for FVD and KVD
@@ -183,9 +184,14 @@ fvd, encoder = get_fvd(train['data'], synth['data'])
 kvd = get_kvd(train['data'], synth['data'], encoder=encoder)
 print('fvd', fvd, 'kvd', kvd)
 
-####### RMSE
-rmse = get_rmse(train_match['data'], synth['data'])
-print('rmse', rmse)
+####### RMSE (requires at least some data points to match up)
+# train_match_data = []
+# for name in synth['names']:
+#     assert name in train['names'], f"{name} not in training set"
+#     train_match_data.append(train['data'][train['names'].index(name)])
+# train_match = {'names': synth['names'], 'data': np.stack(train_match_data, axis=0)}
+# rmse = get_rmse(train_match['data'], synth['data'])
+# print('rmse', rmse)
 
 ####### Histogram
 maxes_histogram(train['data'], synth['data'])
