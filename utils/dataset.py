@@ -186,6 +186,7 @@ class ImageDataset(Dataset):
     def __len__(self):
         return self.data.shape[0]
 
+
     def __getitem__(self, idx):
         """
         Args:
@@ -196,6 +197,10 @@ class ImageDataset(Dataset):
         """
         img = self.data[idx] # already normalized!
         return {'pixel_values': img}
+    
+    
+    def denormalize(self, x):
+        return self.normalizer.denormalize(x)
     
     
 class VideoDataset(Dataset):
@@ -261,6 +266,7 @@ class VideoDataset(Dataset):
     def __len__(self):
         return self.data.shape[0]
 
+
     def __getitem__(self, idx):
         """
         Args:
@@ -296,3 +302,7 @@ class VideoDataset(Dataset):
         #     pixel_values[:, i, :, :] = img_norm
             
         # return {'pixel_values': pixel_values, 'name': chosen_folder}
+
+
+    def denormalize(self, x):
+        return self.normalizer.denormalize(x)

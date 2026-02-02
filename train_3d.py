@@ -309,7 +309,7 @@ def sample_loop(config, model, noise_scheduler, dataloader):
         )['images']
         
         # # output from model is on [-1,1] log scale; convert to [dataset min, dataset max] nonlog
-        images = (images + 1)/2 * (dataset.max - dataset.min) + dataset.min
+        images = dataset.denormalize(images) #(images + 1)/2 * (dataset.max - dataset.min) + dataset.min
         images = np.expm1(images)
         
         for i, name in enumerate(batch['name']):
@@ -328,5 +328,6 @@ if config['train']:
     print('noise scheduler config:\n', noise_scheduler.config)
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
 else:
+    print(unet)
     sample_loop(config, unet, noise_scheduler, dataloader)
     
