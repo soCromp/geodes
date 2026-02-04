@@ -309,8 +309,8 @@ def sample_loop(config, model, noise_scheduler, dataloader):
         )['images']
         
         # # output from model is on [-1,1] log scale; convert to [dataset min, dataset max] nonlog
-        images = dataset.denormalize(images) #(images + 1)/2 * (dataset.max - dataset.min) + dataset.min
-        images = np.expm1(images)
+        images = dataset.denormalize(images.cpu().numpy()) #(images + 1)/2 * (dataset.max - dataset.min) + dataset.min
+        # images = np.expm1(images)
         
         for i, name in enumerate(batch['name']):
             os.makedirs(os.path.join(config['checkpoint_dir'], config['name'], 'samples', name), exist_ok=True)

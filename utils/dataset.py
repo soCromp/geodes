@@ -71,7 +71,13 @@ class HybridNormalizer:
             stat = self.stats[char]
             
             # 1. Select channel
-            val = x_out[..., i, :, :] if x.ndim >= 4 else x_out[i, ...]
+            if x.ndim == 5: # (B, C, F, H, W)
+                val = x_out[:, i, :, :, :]
+            elif x.ndim == 4: # (B, C, H, W)
+                val = x_out[:, i, :, :]
+            else: # (C, H, W)
+                val = x_out[i, ...]
+            # val = x_out[..., i, :, :] if x.ndim >= 4 else x_out[i, ...]
             
             # 2. Fill nans with median value
             if isinstance(val, torch.Tensor):
@@ -102,7 +108,7 @@ class HybridNormalizer:
             if x.ndim == 4:
                 x_out[:, i, :, :] = val
             elif x.ndim == 5:
-                x_out[:, :, i, :, :] = val
+                x_out[:, i, :, :, :] = val
             else:
                 x_out[i, ...] = val
                 
@@ -305,4 +311,6 @@ class VideoDataset(Dataset):
 
 
     def denormalize(self, x):
+        if x.ndim == 4: # ensure theres a batch dim
+            x = x.unsqueeze(0)
         return self.normalizer.denormalize(x)
