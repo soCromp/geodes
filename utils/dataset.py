@@ -126,7 +126,12 @@ class HybridNormalizer:
             
         for i, char in enumerate(self.channels):
             stat = self.stats[char]
-            val = x_out[..., i, :, :] if x.ndim == 4 else x_out[i, ...]
+            if x.ndim == 5: # (B, C, F, H, W)
+                val = x_out[:, i, :, :, :]
+            elif x.ndim == 4: # (B, C, H, W)
+                val = x_out[:, i, :, :]
+            else: # (C, H, W)
+                val = x_out[i, ...]
             
             # 1. Inverse Scale
             # x_orig = (x_norm + 1)/2 * scale + min
@@ -145,7 +150,9 @@ class HybridNormalizer:
                 else:
                     val = np.maximum(val, 0.0)
             
-            if x.ndim == 4:
+            if x.ndim == 5:
+                x_out[:, i, :, :, :] = val
+            elif x.ndim == 4:
                 x_out[:, i, :, :] = val
             else:
                 x_out[i, ...] = val
@@ -219,7 +226,7 @@ class VideoDataset(Dataset):
         # Define the path to the folder containing video frames
         self.base_folder = dataset
         self.folders = [f for f in os.listdir(self.base_folder) if \
-            os.path.isdir(os.path.join(self.base_folder, f))]
+            os.path.isdir(os.path.join(self.base_folder, f))]#[:10]
         
         data = [] # B C F H W
         for folder in self.folders:
@@ -242,31 +249,6 @@ class VideoDataset(Dataset):
         self.normalizer = HybridNormalizer(self.channel_names)
         self.normalizer.fit(self.data)
         self.data = self.normalizer.normalize(self.data)
-                
-        # # Accumulate pixel data to find percentiles
-        # sampled_pixels = []
-        # for folder in self.folders:
-        #     for i in range(sample_frames):
-        #         frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-                
-        #         # Flatten to 1D array
-        #         flat = frame.flatten()
-                
-        #         # --- MEMORY SAFETY ---
-        #         # If your dataset is huge, you don't need every single pixel.
-        #         # Taking every 100th pixel is statistically sufficient for normalization.
-        #         # Remove '[::100]' if you have infinite RAM.
-        #         sampled_pixels.append(flat[::100])
-                
-        # # 1. Combine into one giant array
-        # all_data = np.concatenate(sampled_pixels)
-        # # 2. Apply Log Transform (log(x + 1))
-        # # We do this BEFORE finding percentiles so self.min/max are in "log space"
-        # all_data_log = np.log1p(all_data)
-        # # 3. Calculate 1st and 99th Percentiles
-        # self.min = np.percentile(all_data_log, 1)
-        # self.max = np.percentile(all_data_log, 99)
-        # del sampled_pixels, all_data, all_data_log # free memory
                 
 
     def __len__(self):
