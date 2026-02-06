@@ -3,7 +3,7 @@
 import diffusers 
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffusers.utils import make_image_grid
-from diffusers import DDPMPipeline, DiffusionPipeline, UNet3DConditionModel
+from diffusers import DDPMPipeline, DiffusionPipeline, UNet3DConditionModel, DDIMScheduler
 import numpy as np 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -158,7 +158,7 @@ class CondDiffusionPipeline(DiffusionPipeline):
         batch_size = input.shape[0]
         noise  = noisef(
             (batch_size, self.unet.config['in_channels'], num_frames, config['image_size'], config['image_size']),
-            generator=generator, device=device, dtype=config['dtype']
+            generator=generator, device=device, dtype=config['dtype'], rho=config['correlated_noise']
         )
         sample = noise.clone()
         prompt = input.to(device=device, dtype=config['dtype'])
@@ -285,8 +285,10 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             
         # sample demo images, save model
         if accelerator.is_main_process:
+            sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
+            sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
             pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
-                                             scheduler=noise_scheduler)
+                                             scheduler=sample_noise_scheduler)
             if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['epochs'] - 1: # IMAGE
                 # get just the first time step/prompt frame
                 evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline, accelerator.device)
@@ -329,5 +331,8 @@ if config['train']:
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
 else:
     print(unet)
-    sample_loop(config, unet, noise_scheduler, dataloader)
+    # redefine to deterministic for sampling: (avoid frame 2 noise)
+    sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
+    sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
+    sample_loop(config, unet, sample_noise_scheduler, dataloader)
     
