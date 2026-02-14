@@ -289,7 +289,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
             pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
                                              scheduler=sample_noise_scheduler)
-            if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['epochs'] - 1: # IMAGE
+            if (epoch + 1) % config['save_image_epochs'] == 0: # IMAGE
                 # get just the first time step/prompt frame
                 evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline, accelerator.device)
             if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['epochs'] - 1: # MODEL
