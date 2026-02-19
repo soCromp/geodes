@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from torch.backends.cuda import sdp_kernel
 import torch.multiprocessing as mp
 import os
-from PIL import Image, ImageDraw
+# from PIL import Image, ImageDraw
 from dataclasses import dataclass, asdict
 from accelerate import Accelerator
 from tqdm.auto import tqdm
@@ -177,28 +177,28 @@ class CondDiffusionPipeline(DiffusionPipeline):
         return {"images": sample.cpu()}
 
 
-def evaluate(samples, config, epoch, pipeline, device):
-    # Sample some images from random noise (this is the backward diffusion process).
-    # The default pipeline output type is `List[PIL.Image]`
-    images = pipeline(
-        torch.as_tensor(samples, dtype=config['dtype'], device=device),
-        num_frames=config['frames'],
-        generator=torch.Generator(device=device).manual_seed(config['seed']), 
-        encoder_hidden_states=torch.zeros((config['train_batch_size'], 1, cross_attention_dim),
-                                          device=device)
-        # Use a separate torch generator to avoid rewinding the random state of the main training loop
-    )['images']
+# def evaluate(samples, config, epoch, pipeline, device):
+#     # Sample some images from random noise (this is the backward diffusion process).
+#     # The default pipeline output type is `List[PIL.Image]`
+#     images = pipeline(
+#         torch.as_tensor(samples, dtype=config['dtype'], device=device),
+#         num_frames=config['frames'],
+#         generator=torch.Generator(device=device).manual_seed(config['seed']), 
+#         encoder_hidden_states=torch.zeros((config['train_batch_size'], 1, cross_attention_dim),
+#                                           device=device)
+#         # Use a separate torch generator to avoid rewinding the random state of the main training loop
+#     )['images']
     
-    # output from model is on [-1,1]  scale; convert to [0,255]
-    images = 255/2 * ( 1+np.array(images) )
+#     # output from model is on [-1,1]  scale; convert to [0,255]
+#     images = 255/2 * ( 1+np.array(images) )
     
-    samples_dir = os.path.join(config['checkpoint_dir'], config['name'], "training_samples")
-    os.makedirs(samples_dir, exist_ok=True)
+#     samples_dir = os.path.join(config['checkpoint_dir'], config['name'], "training_samples")
+#     os.makedirs(samples_dir, exist_ok=True)
     
-    for i in range(len(images)):
-        for t in range(config['frames']):
-            frame = Image.fromarray(images[i, :, t, :, :].squeeze()).convert('P')
-            frame.save(os.path.join(samples_dir, f'{epoch:04d}_s{i:02d}_t{t:02d}.png'))
+#     for i in range(len(images)):
+#         for t in range(config['frames']):
+#             frame = Image.fromarray(images[i, :, t, :, :].squeeze()).convert('P')
+#             frame.save(os.path.join(samples_dir, f'{epoch:04d}_s{i:02d}_t{t:02d}.png'))
  
     
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler):
@@ -289,9 +289,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
             pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
                                              scheduler=sample_noise_scheduler)
-            if (epoch + 1) % config['save_image_epochs'] == 0: # IMAGE
-                # get just the first time step/prompt frame
-                evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline, accelerator.device)
+            # if (epoch + 1) % config['save_image_epochs'] == 0: # IMAGE
+            #     # get just the first time step/prompt frame
+            #     evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline, accelerator.device)
             if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['epochs'] - 1: # MODEL
                 pipeline.save_pretrained(os.path.join(config['checkpoint_dir'], config['name']))
         
