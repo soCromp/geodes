@@ -24,6 +24,7 @@ import cv2
 import shutil
 from pathlib import Path
 from urllib.parse import urlparse
+import json 
 
 import accelerate
 import numpy as np
@@ -120,8 +121,8 @@ def rand_log_normal(shape, loc=0., scale=1., device='cpu', dtype=torch.float32):
 
 
 class DummyDataset(Dataset):
-    def __init__(self, dataset='/mnt/data/sonia/occetc/vars3-25.04.05', 
-                 width=1024, height=576, channels=3, sample_frames=25):
+    def __init__(self, dataset, width=32, height=32, channels=3, 
+                 sample_frames=25, mean=None, std=None):
         """
         Args:
             num_samples (int): Number of samples in the dataset.
@@ -130,20 +131,41 @@ class DummyDataset(Dataset):
         # Define the path to the folder containing video frames
         self.base_folder = dataset
         self.folders = [f for f in os.listdir(self.base_folder) if os.path.isdir(os.path.join(self.base_folder, f))]
-        self.data = []
-        for folder in self.folders:
-            storm = []
-            for i in range(sample_frames):
-                storm.append(np.load(os.path.join(self.base_folder, folder, f'{i}.npy')))
-            self.data.append(storm)
         self.num_samples = len(self.folders)
         self.channels = channels
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
+        
+        data = []
+        for folder in self.folders:
+            storm = []
+            for i in range(sample_frames):
+                storm.append(np.load(os.path.join(self.base_folder, folder, f'{i}.npy')))
+            data.append(storm)
+        
+        self.data = np.stack([np.stack(storm) for storm in data]) # N T H W (V)
+        self.data = torch.from_numpy(self.data).float()
+        if self.data.ndim == 4:
+            self.data = self.data.unsqueeze(3) # add channel dim if missing
+        else:
+            self.data = self.data.permute(0, 1, 4, 2, 3)
+        # data now N T V H W
+        
+        if mean is not None:
+            self.norm_mean = mean 
+            self.norm_std = std
+        else:
+            self.norm_mean = self.data.mean(axis=(0,1,2,3))
+            self.norm_std = self.data.std(axis=(0,1,2,3))
+        
+        # normalize the data 
+        self.data = (self.data - self.norm_mean) / self.norm_std
+        
 
     def __len__(self):
         return self.num_samples
+    
 
     def __getitem__(self, idx):
         """
@@ -151,99 +173,9 @@ class DummyDataset(Dataset):
             idx (int): Index of the sample to return.
 
         Returns:
-            dict: A dictionary containing the 'pixel_values' tensor of shape (16, channels, 320, 512).
+            dict: A dictionary containing the 'pixel_values' tensor of shape (T V H W).
         """
-        # # Randomly select a folder (representing a video) from the base folder
-        # chosen_folder = random.choice(self.folders)
-        # folder_path = os.path.join(self.base_folder, chosen_folder)
-        frames = random.choice(self.data)
-        # # Sort the frames by name
-        # frames.sort()
-
-        # Ensure the selected folder has at least `sample_frames`` frames
-        if len(frames) < self.sample_frames:
-            raise ValueError(
-                f"The selected folder '{chosen_folder}' contains fewer than `{self.sample_frames}` frames.")
-
-        # Randomly select a start index for frame sequence
-        start_idx = random.randint(0, len(frames) - self.sample_frames)
-        selected_frames = frames[start_idx:start_idx + self.sample_frames]
-
-        # Initialize a tensor to store the pixel values (3 channels is baked into model)
-        pixel_values = torch.empty((self.sample_frames, 3, self.height, self.width))
-
-        # Load and process each frame
-        for i, frame in enumerate(frames):
-            # frame_path = os.path.join(folder_path, frame_name)
-            # with Image.open(frame_path) as img:
-            with Image.fromarray(frame) as img:
-                # Resize the image and convert it to a tensor
-                img_resized = img.resize((self.width, self.height))
-                img_tensor = torch.from_numpy(np.array(img_resized)).float()
-                img_tensor[img_tensor.isnan()] = 0.0
-                if img_tensor.isnan().sum()>0:
-                    raise ValueError(
-                        f"{img_tensor.isnan().sum()} NaN values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
-                elif img_tensor.isinf().sum()>0:
-                    raise ValueError(
-                        f"Inf values found in the image tensor for frame {frame_name} in folder {chosen_folder}.")
-
-                # Normalize the image by scaling pixel values to [-1, 1]
-                img_normalized = img_tensor / 255
-
-                # Rearrange channels if necessary
-                if self.channels == 3:
-                    img_normalized = img_normalized.permute(
-                        2, 0, 1)  # For RGB images
-                elif self.channels == 1:
-                    img_normalized = img_normalized.unsqueeze(0).repeat([3,1,1])  
-                #     img_normalized = img_normalized.mean(
-                #         dim=2, keepdim=True)  # For grayscale images
-
-                pixel_values[i] = img_normalized
-        return {'pixel_values': pixel_values}
-
-
-class MixDataset(Dataset):
-    def __init__(self, num_samples=10000, dataset1='/home/cyclone/train/windmag_npacific', dataset2='/home/cyclone/train/windmag_natlantic', 
-                 width=1024, height=576, channels=3, sample_frames=25, choicefunc=None, max_train_steps=10000, shared_step=None):
-        self.channels = channels 
-        self.width = width 
-        self.height = height 
-        self.sample_frames = sample_frames 
-        # self.step = 0 #initialize
-        self._shared_step = shared_step
-        if shared_step is None:
-            self._shared_step = mp.Value('i', 0)  # 'i' == signed int
-        self.max_train_steps = max_train_steps
-        self.dataset1 = DummyDataset(dataset=dataset1, width=width, 
-                                     height=height, channels=channels, sample_frames=sample_frames)
-        self.dataset2 = DummyDataset(dataset=dataset2, width=width, 
-                                     height=height, channels=channels, sample_frames=sample_frames)
-        self.num_samples = len(self.dataset1) + len(self.dataset2)
-        
-        if choicefunc == 'uniform':
-            self.choicefunc = lambda f: np.random.choice([0,1])
-        elif choicefunc == 'linear':
-            self.choicefunc = lambda f: np.random.choice([0, 1], p=[f, 1-f])
-        
-    def __len__(self):
-        return self.num_samples 
-    
-    def __getitem__(self, idx):
-        choice=self.choicefunc(self.step/self.max_train_steps)
-        if choice == 0:
-            return self.dataset1[idx]
-        else:
-            return self.dataset2[idx]
-        
-    def set_step(self, step):
-        with self._shared_step.get_lock():
-            self._shared_step.value = int(step)
-        
-    @property
-    def step(self):
-        return self._shared_step.value
+        return {'pixel_values': self.data[idx]} # T V H W
 
 # resizing utils
 # TODO: clean up later
@@ -448,17 +380,18 @@ def parse_args():
     parser.add_argument(
         "--num_frames",
         type=int,
-        default=25,
+        default=8,
+        help='time frames',
     )
     parser.add_argument(
         "--width",
         type=int,
-        default=1024,
+        default=32,
     )
     parser.add_argument(
         "--height",
         type=int,
-        default=576,
+        default=32,
     )
     parser.add_argument(
         "--channels",
@@ -484,7 +417,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/mnt/data/sonia/svd/outputs",
+        default="/mnt/data/sonia/svd/debug",
         help="The output directory where the model predictions and checkpoints will be written.",
     )
     parser.add_argument(
@@ -699,12 +632,12 @@ def parse_args():
         default=128,
         help=("The dimension of the LoRA update matrices."),
     )
-    parser.add_argument(
-        '--from_2d',
-        type=bool,
-        default=False,
-        help='if you want to run this code based off a 2d image model at the path pretrained_model_name_or_path'
-    )
+    # parser.add_argument(
+    #     '--from_2d',
+    #     type=bool,
+    #     default=False,
+    #     help='if you want to run this code based off a 2d image model at the path pretrained_model_name_or_path'
+    # )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -799,37 +732,73 @@ def main():
     )
     vae = AutoencoderKLTemporalDecoder.from_pretrained(
         args.pretrained_model_name_or_path, subfolder="vae", revision=args.revision, variant="fp16")
+    unet = UNetSpatioTemporalConditionModel.from_pretrained(
+        args.pretrained_model_name_or_path if args.pretrain_unet is None else args.pretrain_unet,
+        subfolder="unet",
+        low_cpu_mem_usage=True,
+        variant="fp16",
+    )
     
-    if args.from_2d:
-        unet2d = diffusers.UNet2DConditionModel.from_pretrained(os.path.join(config.pretrained_model_name_or_path, 'unet'))
-        cfg      = dict(unet2d.config)
-        cfg['down_block_types'] = ['3D'.join(name.split('2D')) for name in cfg['down_block_types']]  
-        cfg['up_block_types'] = ['3D'.join(name.split('2D')) for name in cfg['up_block_types']]  
-        cfg['mid_block_type'] = '3D'.join(cfg['mid_block_type'].split('2D'))
-
-        # 2) build a fresh 3-D UNet with matching hyper-params
-        unet  = UNetSpatioTemporalConditionModel.from_config(cfg)
-        sd2 = unet2d.state_dict()
-        sd3 = unet.state_dict()
-        for k, w in sd2.items():
-            w3d = sd3.get(k, np.asarray([]))
-            if w.ndim == 4 and w3d.ndim==5:                                 # (O, I, H, W)
-                w3 = w.unsqueeze(2).repeat(1, 1, num_frames, 1, 1) # add time dimension
-                if time_avg:                                # Ho et al., 2022
-                    w3 /= num_frames
-                sd3[k] = w3
-            elif w.ndim > w3d.ndim:
-                sd3[k] = w.squeeze()
-            else: # no change
-                sd3[k] = w
-        unet.load_state_dict(sd3, strict=False)
-    else:
-        unet = UNetSpatioTemporalConditionModel.from_pretrained(
-            args.pretrained_model_name_or_path if args.pretrain_unet is None else args.pretrain_unet,
-            subfolder="unet",
-            low_cpu_mem_usage=True,
-            variant="fp16",
+    unet.config["sample_size"] = args.width
+    
+    # modify unet input channels
+    new_in_channels = 2 * args.channels
+    if unet.config.in_channels != new_in_channels:
+        old_conv_in = unet.conv_in
+        new_conv_in = torch.nn.Conv2d(
+            new_in_channels, 
+            old_conv_in.out_channels, 
+            old_conv_in.kernel_size, 
+            old_conv_in.stride, 
+            old_conv_in.padding,
+            device=unet.device,
+            dtype=unet.dtype
         )
+        
+        # Safely transfer existing weight
+        with torch.no_grad():
+            min_in = min(old_conv_in.in_channels, new_in_channels)
+            # Copy the original 8 channels into the first 8 slots of the new layer
+            new_conv_in.weight[:, :min_in, :, :] = old_conv_in.weight[:, :min_in, :, :]
+            
+            # Zero-initialize the extra channels so they start neutral
+            if new_in_channels > old_conv_in.in_channels:
+                torch.nn.init.zeros_(new_conv_in.weight[:, min_in:, :, :])
+                
+            if old_conv_in.bias is not None:
+                new_conv_in.bias.copy_(old_conv_in.bias)
+                
+        unet.conv_in = new_conv_in
+        unet.config["in_channels"] = new_in_channels
+        
+    # modify output unet channels 
+    if unet.config.out_channels != args.channels:
+        old_conv_out = unet.conv_out
+        new_conv_out = torch.nn.Conv2d(
+            old_conv_out.in_channels, 
+            args.channels, 
+            old_conv_out.kernel_size, 
+            old_conv_out.stride, 
+            old_conv_out.padding,
+            device=unet.device,
+            dtype=unet.dtype
+        )
+        
+        with torch.no_grad():
+            min_out = min(old_conv_out.out_channels, args.channels)
+            new_conv_out.weight[:min_out, :, :, :] = old_conv_out.weight[:min_out, :, :, :]
+            
+            if args.channels > old_conv_out.out_channels:
+                torch.nn.init.zeros_(new_conv_out.weight[min_out:, :, :, :])
+                
+            if old_conv_out.bias is not None:
+                new_conv_out.bias[:min_out] = old_conv_out.bias[:min_out]
+                if args.channels > old_conv_out.out_channels:
+                    torch.nn.init.zeros_(new_conv_out.bias[min_out:])
+                    
+        unet.conv_out = new_conv_out
+        unet.config["out_channels"] = args.channels
+        
 
     # Freeze vae and image_encoder
     vae.requires_grad_(False)
@@ -847,7 +816,7 @@ def main():
     # Move image_encoder and vae to gpu and cast to weight_dtype
     image_encoder.to(accelerator.device, dtype=weight_dtype)
     vae.to(accelerator.device, dtype=weight_dtype)
-    # unet.to(accelerator.device, dtype=weight_dtype)
+    unet.to(accelerator.device, dtype=weight_dtype)
 
     # Create EMA for the unet.
     if args.use_ema:
@@ -951,14 +920,6 @@ def main():
         eps=args.adam_epsilon,
     )
 
-    # optimizer = optimizer_cls(
-    #     unet.parameters(),
-    #     lr=args.learning_rate,
-    #     betas=(args.adam_beta1, args.adam_beta2),
-    #     weight_decay=args.adam_weight_decay,
-    #     eps=args.adam_epsilon,
-    # )
-
     # check parameters
     if accelerator.is_main_process:
         rec_txt1 = open('rec_para.txt', 'w')
@@ -975,22 +936,27 @@ def main():
     # DataLoaders creation:
     args.global_batch_size = args.per_gpu_batch_size * accelerator.num_processes
 
-    train_dataset=None
-    if args.dataset2 is not None:
-        shared_step = mp.Value('i', 0)
-        train_dataset = MixDataset(dataset1=os.path.join(args.dataset, 'train'), dataset2=os.path.join(args.dataset2, 'train'), 
-                                   width=args.width, height=args.height,
-                                   channels=args.channels, sample_frames=args.num_frames, 
-                                   choicefunc=args.choice_func, max_train_steps=args.max_train_steps, shared_step=shared_step)
-    else:
-        train_dataset = DummyDataset(dataset=os.path.join(args.dataset, 'train'), 
-                                     width=args.width, height=args.height, 
+    train_dataset = DummyDataset(dataset=os.path.join(args.dataset, 'train'), 
+                                    width=args.width, height=args.height, 
                                     channels=args.channels, sample_frames=args.num_frames)
+    with open(os.path.join(args.output_dir, 'datanorm.json'), 'w') as f:
+        json.dump({'mean': train_dataset.norm_mean.tolist(), 'std': train_dataset.norm_std.tolist()}, f)
         
+    val_dataset = DummyDataset(dataset=os.path.join(args.dataset, 'val'), 
+                               width=args.width, height=args.height,
+                               channels=args.channels, sample_frames=args.num_frames,
+                               mean=train_dataset.norm_mean, std=train_dataset.norm_std)
+
     sampler = RandomSampler(train_dataset)
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
         sampler=sampler,
+        batch_size=args.per_gpu_batch_size,
+        num_workers=args.num_workers,
+    )
+    val_dataloader = torch.utils.data.DataLoader(
+        val_dataset,
+        sampler=RandomSampler(val_dataset),
         batch_size=args.per_gpu_batch_size,
         num_workers=args.num_workers,
     )
@@ -1005,16 +971,16 @@ def main():
         
     train_dataset.max_train_steps = args.max_train_steps
     
-    val_prompt_names = sorted(os.listdir(os.path.join(args.dataset, 'val')))[:args.num_validation_images]
-    val_prompts = [] 
-    for name in val_prompt_names:
-        img = Image.fromarray(np.load(os.path.join(args.dataset, 'val', name, '0.npy'))).resize((224,224))
-        # 224 is hard coded in SVD model
-        img_tensor = torch.from_numpy(np.array(img)).float() 
-        img_tensor[img_tensor.isnan()] = 0.0 
-        img_normalized = img_tensor / 255
-        img_normalized = img_normalized.unsqueeze(0).repeat([3,1,1]).unsqueeze(0)
-        val_prompts.append(img_normalized)
+    # val_prompt_names = sorted(os.listdir(os.path.join(args.dataset, 'val')))[:args.num_validation_images]
+    # val_prompts = [] 
+    # for name in val_prompt_names:
+    #     img = np.load(os.path.join(args.dataset, 'val', name, '0.npy'))
+    #     # 224 is hard coded in SVD model
+    #     img_tensor = torch.from_numpy(np.array(img)).float() 
+    #     img_tensor[img_tensor.isnan()] = 0.0 
+    #     img_normalized = img_tensor / 255
+    #     img_normalized = img_normalized.unsqueeze(0).repeat([3,1,1]).unsqueeze(0)
+    #     val_prompts.append(img_normalized)
 
     lr_scheduler = get_scheduler(
         args.lr_scheduler,
@@ -1159,35 +1125,36 @@ def main():
                 )
                 conditional_pixel_values = pixel_values[:, 0:1, :, :, :]
 
-                latents = tensor_to_vae_latent(pixel_values, vae)
+                # latents = tensor_to_vae_latent(pixel_values, vae)
 
-                # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents)
-                bsz = latents.shape[0]
+                # Sample noise that we'll add to the "pixels"
+                noise = torch.randn_like(pixel_values)
+                bsz = pixel_values.shape[0]
 
-                cond_sigmas = rand_log_normal(shape=[bsz,], loc=-3.0, scale=0.5).to(latents)
+                cond_sigmas = rand_log_normal(shape=[bsz,], loc=-3.0, scale=0.5).to(pixel_values.device)
                 noise_aug_strength = cond_sigmas[0] # TODO: support batch > 1
                 cond_sigmas = cond_sigmas[:, None, None, None, None]
                 conditional_pixel_values = \
                     torch.randn_like(conditional_pixel_values) * cond_sigmas + conditional_pixel_values
-                conditional_latents = tensor_to_vae_latent(conditional_pixel_values, vae)[:, 0, :, :, :]
-                conditional_latents = conditional_latents / vae.config.scaling_factor
+                # conditional_latents = tensor_to_vae_latent(conditional_pixel_values, vae)[:, 0, :, :, :]
+                # conditional_latents = conditional_latents / vae.config.scaling_factor
 
                 # Sample a random timestep for each image
                 # P_mean=0.7 P_std=1.6
-                sigmas = rand_log_normal(shape=[bsz,], loc=0.7, scale=1.6).to(latents.device)
+                sigmas = rand_log_normal(shape=[bsz,], loc=0.7, scale=1.6).to(pixel_values.device)
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 sigmas = sigmas[:, None, None, None, None]
-                noisy_latents = latents + noise * sigmas
+                noisy_pixels = pixel_values + noise * sigmas
                 timesteps = torch.Tensor(
                     [0.25 * sigma.log() for sigma in sigmas]).to(accelerator.device)
 
-                inp_noisy_latents = noisy_latents / ((sigmas**2 + 1) ** 0.5)
+                inp_noisy_pixels = noisy_pixels / ((sigmas**2 + 1) ** 0.5)
 
                 # Get the text embedding for conditioning.
-                encoder_hidden_states = encode_image(
-                    pixel_values[:, 0, :, :, :].float())
+                encoder_hidden_states = torch.zeros((bsz, 1, unet.config.cross_attention_dim),
+                                                    device=accelerator.device, dtype=weight_dtype)
+                #            encode_image(pixel_values[:, 0, :, :, :].float())
 
                 # Here I input a fixed numerical value for 'motion_bucket_id', which is not reasonable.
                 # However, I am unable to fully align with the calculation method of the motion score,
@@ -1199,22 +1166,22 @@ def main():
                     encoder_hidden_states.dtype,
                     bsz,
                 )
-                added_time_ids = added_time_ids.to(latents.device)
+                added_time_ids = added_time_ids.to(accelerator.device)
 
                 # Conditioning dropout to support classifier-free guidance during inference. For more details
                 # check out the section 3.2.1 of the original paper https://arxiv.org/abs/2211.09800.
                 if args.conditioning_dropout_prob is not None:
                     random_p = torch.rand(
-                        bsz, device=latents.device, generator=generator)
+                        bsz, device=accelerator.device, generator=generator)
                     # Sample masks for the edit prompts.
                     prompt_mask = random_p < 2 * args.conditioning_dropout_prob
                     prompt_mask = prompt_mask.reshape(bsz, 1, 1)
                     # Final text conditioning.
                     null_conditioning = torch.zeros_like(encoder_hidden_states)
                     encoder_hidden_states = torch.where(
-                        prompt_mask, null_conditioning.unsqueeze(1), encoder_hidden_states.unsqueeze(1))
+                        prompt_mask, null_conditioning, encoder_hidden_states)
                     # Sample masks for the original images.
-                    image_mask_dtype = conditional_latents.dtype
+                    image_mask_dtype = conditional_pixel_values.dtype
                     image_mask = 1 - (
                         (random_p >= args.conditioning_dropout_prob).to(
                             image_mask_dtype)
@@ -1222,28 +1189,30 @@ def main():
                     )
                     image_mask = image_mask.reshape(bsz, 1, 1, 1)
                     # Final image conditioning.
-                    conditional_latents = image_mask * conditional_latents
+                    conditional_pixel_values = image_mask * conditional_pixel_values
 
                 # Concatenate the `conditional_latents` with the `noisy_latents`.
-                conditional_latents = conditional_latents.unsqueeze(
-                    1).repeat(1, noisy_latents.shape[1], 1, 1, 1)
-                inp_noisy_latents = torch.cat(
-                    [inp_noisy_latents, conditional_latents], dim=2)
+                conditional_pixel_values = conditional_pixel_values.repeat(
+                    1, noisy_pixels.shape[1], 1, 1, 1)
+                # print(inp_noisy_pixels.shape, conditional_pixel_values.shape)
+                inp_noisy_pixels = torch.cat(
+                    [inp_noisy_pixels, conditional_pixel_values], dim=2)
+                # print(inp_noisy_pixels.shape)
 
                 # check https://arxiv.org/abs/2206.00364(the EDM-framework) for more details.
-                target = latents
+                target = pixel_values
                 model_pred = unet(
-                    inp_noisy_latents, timesteps, encoder_hidden_states, added_time_ids=added_time_ids).sample
+                    inp_noisy_pixels, timesteps, encoder_hidden_states, added_time_ids=added_time_ids).sample
 
                 # Denoise the latents
                 c_out = -sigmas / ((sigmas**2 + 1)**0.5)
                 c_skip = 1 / (sigmas**2 + 1)
-                denoised_latents = model_pred * c_out + c_skip * noisy_latents
+                denoised_pixels = model_pred * c_out + c_skip * noisy_pixels
                 weighing = (1 + sigmas ** 2) * (sigmas**-2.0)
 
                 # MSE loss
                 loss = torch.mean(
-                    (weighing.float() * (denoised_latents.float() -
+                    (weighing.float() * (denoised_pixels.float() -
                      target.float()) ** 2).reshape(target.shape[0], -1),
                     dim=1,
                 )
@@ -1306,7 +1275,7 @@ def main():
                     # sample images!
                     if (
                         (global_step % args.validation_steps == 0)
-                        or (global_step == 1)
+                        # or (global_step == 1)
                     ):
                         logger.info(
                             f"Running validation... \n Generating {args.num_validation_images} videos."
@@ -1339,10 +1308,10 @@ def main():
                         with torch.autocast(
                             str(accelerator.device).replace(":0", ""), enabled=accelerator.mixed_precision == "fp16"
                         ):
-                            for name, prompt in zip(val_prompt_names, val_prompts):
+                            for i, prompt in enumerate(val_dataloader):
                                 num_frames = args.num_frames 
                                 video_frames = pipeline(
-                                    img_normalized,# Image.fromarray(img),
+                                    prompt['pixel_values'],# Image.fromarray(img),
                                     # load_image('demo.png').resize((args.width, args.height)),
                                     height=args.height,
                                     width=args.width,
@@ -1354,15 +1323,17 @@ def main():
                                     # generator=generator,
                                 ).frames[0]
 
-                                out_file = os.path.join(
+                                out_dir = os.path.join(
                                     val_save_dir,
-                                    f"step_{global_step}_val_img_{name}.mp4",
+                                    f"step_{global_step}_val_img_{i}",
                                 )
+                                os.makedirs(out_dir, exist_ok=True)
 
-                                for i in range(num_frames):
+                                for j in range(num_frames):
                                     img = video_frames[i]
-                                    video_frames[i] = np.array(img)
-                                export_to_gif(video_frames, out_file, 8)
+                                    video_frame = np.array(img)
+                                    np.save(os.path.join(out_dir, f'{j}.npy'), video_frame)
+                                # export_to_gif(video_frames, out_file, 8)
                                 
                             # for val_img_idx in range(args.num_validation_images):
                             #     num_frames = args.num_frames
