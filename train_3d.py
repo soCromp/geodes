@@ -3,7 +3,7 @@
 import diffusers 
 from diffusers.optimization import get_cosine_schedule_with_warmup
 from diffusers.utils import make_image_grid
-from diffusers import DDPMPipeline, DiffusionPipeline, UNet3DConditionModel
+from diffusers import DDPMPipeline, DiffusionPipeline, UNet3DConditionModel, DDIMScheduler
 import numpy as np 
 import torch
 from torch.utils.data import Dataset, DataLoader
@@ -158,7 +158,7 @@ class CondDiffusionPipeline(DiffusionPipeline):
         batch_size = input.shape[0]
         noise  = noisef(
             (batch_size, self.unet.config['in_channels'], num_frames, config['image_size'], config['image_size']),
-            generator=generator, device=device, dtype=config['dtype']
+            generator=generator, device=device, dtype=config['dtype'], rho=config['correlated_noise']
         )
         sample = noise.clone()
         prompt = input.to(device=device, dtype=config['dtype'])
@@ -285,9 +285,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             
         # sample demo images, save model
         if accelerator.is_main_process:
+            sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
+            sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
             pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
-                                             scheduler=noise_scheduler)
-            if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['epochs'] - 1: # IMAGE
+                                             scheduler=sample_noise_scheduler)
+            if (epoch + 1) % config['save_image_epochs'] == 0: # IMAGE
                 # get just the first time step/prompt frame
                 evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline, accelerator.device)
             if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['epochs'] - 1: # MODEL
@@ -309,8 +311,8 @@ def sample_loop(config, model, noise_scheduler, dataloader):
         )['images']
         
         # # output from model is on [-1,1] log scale; convert to [dataset min, dataset max] nonlog
-        images = (images + 1)/2 * (dataset.max - dataset.min) + dataset.min
-        images = np.expm1(images)
+        images = dataset.denormalize(images.cpu().numpy()) #(images + 1)/2 * (dataset.max - dataset.min) + dataset.min
+        # images = np.expm1(images)
         
         for i, name in enumerate(batch['name']):
             os.makedirs(os.path.join(config['checkpoint_dir'], config['name'], 'samples', name), exist_ok=True)
@@ -328,5 +330,9 @@ if config['train']:
     print('noise scheduler config:\n', noise_scheduler.config)
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
 else:
-    sample_loop(config, unet, noise_scheduler, dataloader)
+    print(unet)
+    # redefine to deterministic for sampling: (avoid frame 2 noise)
+    sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
+    sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
+    sample_loop(config, unet, sample_noise_scheduler, dataloader)
     
