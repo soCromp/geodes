@@ -6,7 +6,7 @@ from utils.forecast_metrics import RmseAccumulator, PsdAccumulator
 import random
 
 from matplotlib import pyplot as plt
-plt.rcParams.update({'font.size': 15})
+plt.rcParams.update({'font.size': 12})
 
 train_path = sys.argv[1] 
 synth_path = sys.argv[2]
@@ -16,13 +16,16 @@ split = train_path.split('/')[-1]
 variable = train_path.split('/')[4]
 if variable == 'windmag':
     variable = 'windmag_' + train_path.split('/')[5]
+    channel_names = ['windmag']
+elif variable == 'multivar':
+    channel_names = ['slp', 'u', 'v', 't', 'q']
 method = 'unknown_method'
 if 'geodes' in synth_path:
     method = 'geodes'
 elif 'svd' in synth_path:
     method = 'svd'
 elif 'climax' in synth_path:
-    method = 'climax'
+    method = 'ClimaX'
 elif 'clima' in synth_path:
     method = 'climatology'
 elif 'codicast' in synth_path:
@@ -93,73 +96,100 @@ def mins_maxes(train, synth): # good as a sanity check
 
 
 def maxes_histogram(train, synth, ):
-    plt.hist(train.max(axis=(1,2,3)), density=True,bins=30, alpha=0.5, label='Real')
-    plt.hist(synth.max(axis=(1,2,3)), density=True,bins=30, alpha=0.5, label=f'Synth ({method.title()})')
+    # axis=1,2,3 to average across time, lat and lon (axis 0 is number of samples)
+    plt.hist(train.max(axis=(1,2,3)), density=True,bins=30, alpha=0.5, label='Ground Truth',)
+    plt.hist(synth.max(axis=(1,2,3)), density=True,bins=30, alpha=0.5, label=f'{method.title()}-Predicted')
     plt.legend()
-    plt.title(f'Maximum Wind Speed In {method.title()} Synthetic vs Real Storms')
+    plt.ylabel('Density')
+    plt.xlabel(f'Maximum Storm Windspeed (m/s)')
+    plt.title(f'Maximum Wind Speed: {method.title()} Synthetic vs Real Storms')
     plt.savefig(f'{variable}_{split}_{method}.pdf')
     print('histogram saved to', f'{variable}_{split}_{method}.pdf')
 
 
-def get_psd(train, synth, batch_size=64):
+def get_psd(train, synth, channel_names, batch_size=64):
     train = train[:, 1:, ...] # skip prompt
     synth = synth[:, 1:, ...] # skip prompt
+    
+    # Ensure shape is (B, T, H, W, V)
     if train.ndim == 4:
         train = np.expand_dims(train, -1)
         synth = np.expand_dims(synth, -1)
-    _, T, H, W, V = train.shape
+        
+    B, T, H, W, V = train.shape
     accumulator = PsdAccumulator(H, W, V)
     n_splits = int(np.ceil(train.shape[0] / batch_size))
+    
     for batch_synth, batch_train in zip(np.array_split(synth, n_splits), np.array_split(train, n_splits)):
         accumulator.update(batch_synth, batch_train)
         
     results = accumulator.results()
     k = results['k_wavenumbers']
-    p_pred = results['psd_pred'][0] # Variable 0
-    p_true = results['psd_true'][0] # Variable 0
     
-    plt.figure(figsize=(6, 6))
-    # Log-Log plot is standard for PSD
-    plt.loglog(k, p_true, label='Real', color='blue')
-    plt.loglog(k, p_pred, label=f'Synth ({method.title()})', color='orange')
-    plt.ylim(bottom=0,)
-    
-    plt.xlabel('Wavenumber (Frequency)')
-    plt.ylabel('Power Spectral Density')
-    plt.title(f'PSD: Sharpness Analysis for Real vs {method.title()} Synthetic')
-    plt.legend()
-    plt.grid(True, which="both", ls="-", alpha=0.5)
-    plt.savefig(f'psd_{variable}_{split}_{method}.png')
-    print(f'PSD plot saved to psd_{variable}_{split}_{method}.png')
+    # Loop through each variable to create separate plots
+    for v in range(V):
+        var_name = channel_names[v]
+        p_pred = results['psd_pred'][v] # Use specific variable index
+        p_true = results['psd_true'][v]
+        
+        plt.figure(figsize=(6, 6))
+        plt.loglog(k, p_true, label='Real', color='blue')
+        plt.loglog(k, p_pred, label=f'Synth ({method.title()})', color='orange')
+        
+        plt.xlabel('Wavenumber (Frequency)')
+        plt.ylabel('Power Spectral Density')
+        plt.title(f'PSD: {var_name.upper()} Sharpness Analysis')
+        plt.legend()
+        plt.grid(True, which="both", ls="-", alpha=0.5)
+        
+        plt.savefig(f'psd_{variable}_{split}_{var_name}_{method}.png')
+        plt.close() # Important to close when looping
+        print(f'PSD plot saved for {var_name}:', f'psd_{variable}_{split}_{var_name}_{method}.png')
 
 
-def qq_plot(train, synth):
-    train_maxes = train.max(axis=(1,2,3,))
-    train_maxes = train_maxes[train_maxes < 150] # remove crazy outliers (may need to change for other variables)
-    synth = np.nan_to_num(synth, 0.0)
-    synth_maxes = synth.max(axis=(1,2,3,))
-    synth_maxes = synth_maxes[synth_maxes < 150] # remove crazy outliers (may need to change for other variables)
-    quantiles = np.linspace(0, 100, 1000)
-    q_real = np.percentile(train_maxes, quantiles)
-    q_synth = np.percentile(synth_maxes, quantiles)
-    # print(q_real, q_synth )
+def qq_plot(train, synth, channel_names):
+    # train/synth shape: (B, T, H, W, V)
+    V = train.shape[-1]
     
-    plt.figure(figsize=(7, 7), dpi=120)
-    plt.plot(q_real, q_synth, lw=2.5, color='orange', label=f'Synth {method.title()} Distribution')
-    
-    min_val = min(q_real.min(), q_synth.min())
-    max_val = max(q_real.max(), q_synth.max())
-    plt.plot([min_val, max_val], [min_val, max_val], 
-             ls='--', color='blue', alpha=0.6, label='Perfect Calibration')
-    
-    plt.xlabel(f'Real Max {variable.title()}', fontsize=12)
-    plt.ylabel(f'{method.title()} Max {variable.title()}', fontsize=12)
-    plt.title(f'Q-Q plot for Real vs {method.title()} Synthetic', fontsize=14, pad=12)
-    plt.legend(frameon=True, fontsize=10)
-    plt.grid(True, alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(f'qq_{variable}_{split}_{method}.png')
-    print(f'Q-Q plot saved to qq_{variable}_{split}_{method}.png')
+    for v in range(V):
+        var_name = channel_names[v]
+        
+        # Extract maxes for the current variable only
+        t_var = train[..., v]
+        s_var = np.nan_to_num(synth[..., v], 0.0)
+        
+        train_maxes = t_var.max(axis=(1,2,3))
+        synth_maxes = s_var.max(axis=(1,2,3))
+        
+        # Dynamic outlier removal: Filter values above the 99.9th percentile of real data
+        # This replaces the hardcoded '150' for all variables
+        threshold = np.percentile(train_maxes, 99.9)
+        train_maxes = train_maxes[train_maxes <= threshold]
+        synth_maxes = synth_maxes[synth_maxes <= threshold]
+        
+        quantiles = np.linspace(0, 100, 1000)
+        q_real = np.percentile(train_maxes, quantiles)
+        q_synth = np.percentile(synth_maxes, quantiles)
+        
+        plt.figure(figsize=(7, 7), dpi=120)
+        plt.plot(q_real, q_synth, lw=2.5, color='orange', label=f'Synth {method.title()}')
+        
+        # Dynamic line bounds
+        min_val = min(q_real.min(), q_synth.min())
+        max_val = max(q_real.max(), q_synth.max())
+        plt.plot([min_val, max_val], [min_val, max_val], 
+                 ls='--', color='blue', alpha=0.6, label='Perfect Calibration')
+        
+        plt.xlabel(f'Real Max {var_name.upper()}', fontsize=12)
+        plt.ylabel(f'{method.title()} Max {var_name.upper()}', fontsize=12)
+        plt.title(f'Q-Q Plot: {var_name.upper()} Intensity Distribution')
+        plt.legend(frameon=True)
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        
+        plt.savefig(f'qq_{variable}_{split}_{var_name}_{method}.png')
+        plt.close()
+        print(f'Q-Q plot saved for {var_name}:', f'qq_{variable}_{split}_{var_name}_{method}.png')
     
 
 train = load_data(train_path)
@@ -184,20 +214,33 @@ fvd, encoder = get_fvd(train['data'], synth['data'])
 kvd = get_kvd(train['data'], synth['data'], encoder=encoder)
 print('fvd', fvd, 'kvd', kvd)
 
-####### RMSE (requires at least some data points to match up)
-# train_match_data = []
-# for name in synth['names']:
-#     assert name in train['names'], f"{name} not in training set"
-#     train_match_data.append(train['data'][train['names'].index(name)])
-# train_match = {'names': synth['names'], 'data': np.stack(train_match_data, axis=0)}
-# rmse = get_rmse(train_match['data'], synth['data'])
-# print('rmse', rmse)
+###### RMSE (requires at least some data points to match up)
+train_match_data = []
+for name in synth['names']:
+    assert name in train['names'], f"{name} not in training set"
+    train_match_data.append(train['data'][train['names'].index(name)])
+train_match = {'names': synth['names'], 'data': np.stack(train_match_data, axis=0)}
+rmse = get_rmse(train_match['data'], synth['data'])
+print('rmse', rmse)
+
+
+if variable == 'multivar':
+    windmag_train = np.sqrt(train['data'][..., 1]**2 + train['data'][..., 2]**2)
+    windmag_synth = np.sqrt(synth['data'][..., 1]**2 + synth['data'][..., 2]**2)
 
 ####### Histogram
-maxes_histogram(train['data'], synth['data'])
+if variable == 'multivar':
+    maxes_histogram(windmag_train, windmag_synth)
+else:
+    maxes_histogram(train['data'], synth['data'])
 
 ####### Power spectral density PSD
-get_psd(train['data'], synth['data'])
+get_psd(train['data'], synth['data'], channel_names)
+if variable == 'multivar':
+    get_psd(windmag_train, windmag_synth, ['windmag'])
 
 ####### Quantile-quantile plot
-qq_plot(train['data'], synth['data'])
+qq_plot(train['data'], synth['data'], channel_names)
+if variable == 'multivar':
+    qq_plot(np.expand_dims(windmag_train, -1), 
+            np.expand_dims(windmag_synth, -1), ['windmag'])
