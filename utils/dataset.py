@@ -269,7 +269,10 @@ class VideoDataset(Dataset):
 
     def denormalize(self, x):
         if x.ndim == 4: # ensure theres a batch dim
-            x = x.unsqueeze(0)
+            if isinstance(x, torch.Tensor):
+                x = x.unsqueeze(0)
+            else:
+                x = np.expand_dims(x, 0)
         
         if isinstance(x, torch.Tensor):
             # clamp to prevent linear/exponential explosion of diffusion overshoots
