@@ -174,31 +174,9 @@ class CondDiffusionPipeline(DiffusionPipeline):
             z = noise[:, :, 0, :, :]
             sample[:, :, 0, :, :] = self.scheduler.add_noise(prompt, z, t_prev)
             
+        # clean prompt
+        sample[:, :, 0, :, :] = prompt
         return {"images": sample.cpu()}
-
-
-# def evaluate(samples, config, epoch, pipeline, device):
-#     # Sample some images from random noise (this is the backward diffusion process).
-#     # The default pipeline output type is `List[PIL.Image]`
-#     images = pipeline(
-#         torch.as_tensor(samples, dtype=config['dtype'], device=device),
-#         num_frames=config['frames'],
-#         generator=torch.Generator(device=device).manual_seed(config['seed']), 
-#         encoder_hidden_states=torch.zeros((config['train_batch_size'], 1, cross_attention_dim),
-#                                           device=device)
-#         # Use a separate torch generator to avoid rewinding the random state of the main training loop
-#     )['images']
-    
-#     # output from model is on [-1,1]  scale; convert to [0,255]
-#     images = 255/2 * ( 1+np.array(images) )
-    
-#     samples_dir = os.path.join(config['checkpoint_dir'], config['name'], "training_samples")
-#     os.makedirs(samples_dir, exist_ok=True)
-    
-#     for i in range(len(images)):
-#         for t in range(config['frames']):
-#             frame = Image.fromarray(images[i, :, t, :, :].squeeze()).convert('P')
-#             frame.save(os.path.join(samples_dir, f'{epoch:04d}_s{i:02d}_t{t:02d}.png'))
  
     
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler):
@@ -261,7 +239,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             with accelerator.accumulate(model):
                 noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros,
                                     return_dict=False)[0]
-                loss = F.mse_loss(noise_pred[:,:,1:,:,:], noise[:,:,1:,:,:]) # skip zeroth/prompt frame
+                loss = F.mse_loss(noise_pred, noise)
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:

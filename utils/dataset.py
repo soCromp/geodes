@@ -228,18 +228,18 @@ class VideoDataset(Dataset):
         self.folders = [f for f in os.listdir(self.base_folder) if \
             os.path.isdir(os.path.join(self.base_folder, f))]#[:10]
         
-        data = [] # B C F H W
+        data = [] # want B C T H W
         for folder in self.folders:
             frames = []
             for i in range(self.sample_frames):
-                frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
+                frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy')) # H W (C)
                 frames.append(frame)
-            data.append(np.stack(frames, axis=0))
-        self.data = np.stack(data, axis=0)
-        if self.data.ndim == 4:
-            self.data = np.expand_dims(self.data, axis=1) # add channel dim if missing
+            data.append(np.stack(frames, axis=0)) # T H W (C)
+        self.data = np.stack(data, axis=0) # B T H W (C)
+        if self.data.ndim == 4: # add channel dim if missing
+            self.data = np.expand_dims(self.data, axis=1) # now B C T H W
         else:
-            self.data = np.transpose(self.data, (0, 4, 1, 2, 3)) # B C F H W
+            self.data = np.transpose(self.data, (0, 4, 1, 2, 3)) # B C T H W
         assert self.data.shape[3] == self.height and self.data.shape[4] == self.width
         
         with open(os.path.join(self.base_folder, '../channels.txt'), 'r') as f:
@@ -265,34 +265,22 @@ class VideoDataset(Dataset):
             shape (batch, channels, time, H, W).
         """
         return {'pixel_values': self.data[idx], 'name': self.folders[idx]}
-        # # Randomly select a folder (representing a video) from the base folder
-        # chosen_folder = self.folders[idx] # random.choice(self.folders)
-        # folder_path = os.path.join(self.base_folder, chosen_folder)
-        # frames = sorted(os.listdir(folder_path))[:self.sample_frames] #paths
-        # frames = [np.load(os.path.join(folder_path, f)) for f in frames] #frame matrices
-
-        # # Initialize a tensor to store the pixel values (1 in batch size dimension for dataloader)
-        # pixel_values = torch.empty((1, self.sample_frames, self.height, self.width))
-
-        # # Load and process each frame
-        # for i, frame in enumerate(frames):
-        #     frame_log = np.log1p(frame)
-        #     img_tensor = torch.from_numpy(frame_log).float()
-        #     img_tensor[img_tensor.isnan()] = 0.0
-        #     img_norm = 2.0 * (img_tensor - self.min) / (self.max - self.min) - 1.0
-        #     img_norm = torch.clamp(img_norm, -1.0, 1.0)
-            
-        #     # Normalize the image by scaling pixel values to [-1, 1]
-        #     # img_normalized = 2 * (img_tensor - self.min) / (self.max - self.min) - 1
-        #     # img_normalized[img_normalized<-1] = -1 # in case of rounding errors
-        #     # img_normalized[img_normalized>1] = 1
-
-        #     pixel_values[:, i, :, :] = img_norm
-            
-        # return {'pixel_values': pixel_values, 'name': chosen_folder}
 
 
     def denormalize(self, x):
         if x.ndim == 4: # ensure theres a batch dim
             x = x.unsqueeze(0)
-        return self.normalizer.denormalize(x)
+        
+        if isinstance(x, torch.Tensor):
+            # clamp to prevent linear/exponential explosion of diffusion overshoots
+            x_out = torch.clamp(x.clone(), -1.0, 1.0) 
+        else:
+            x_out = np.clip(x.copy(), -1.0, 1.0)
+            
+        x = self.normalizer.denormalize(x)
+        
+        # go from B C T H W to B T H W C
+        if isinstance(x, torch.Tensor): 
+            x = x.permute(0, 2, 3, 4, 1)
+        else:
+            x = np.permute_dims(x, (0, 2, 3, 4, 1))

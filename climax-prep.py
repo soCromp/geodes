@@ -19,9 +19,9 @@ trackspath1='/home/sonia/mcms/tracker/1940-2010/era5/out_era5/era5/mcms_era5_194
 trackspath2='/home/sonia/mcms/tracker/2010-2024/era5/out_era5/era5/FIXEDmcms_era5_2010_2024_tracks.txt'
 joinyear = 2010 # overlap for the track data
 
-use_temperature_2m = True
-use_geopotential = True #925hpa
-use_slp = False # whether to include slp channel
+use_temperature_2m = False
+use_geopotential = False #925hpa
+use_slp = True # whether to include slp channel
 use_windmag = False #include wind magnitude channel # NOTE THIS IS 500hPa
 use_winduv = True # include wind u and v components channels # NOTE THIS IS 500hPa
 use_temperature = True # temperature at 925hPa 
@@ -45,7 +45,7 @@ elif reg_id == 111:
     basin = 'pacific'
 basin = hemi + basin
 
-outpath = f'/mnt/data/sonia/climax-data/date/{basin}-multivar-fullcontext'
+outpath = f'/mnt/data/sonia/aurora-data/date/input-{basin}-multivar-fullcontext'
 
 # %%
 regmask = xr.open_dataset('/home/cyclone/regmask_0723_anl.nc')
@@ -83,7 +83,7 @@ varnames = [] # list of variables that will be included in this output dataset
 varlocs = {'temperature_2m': f'/mnt/data/sonia/cyclone/{grid}/temperature_2m',
            'geopotential': f'/mnt/data/sonia/cyclone/{grid}/geopotential',
            'slp': f'/mnt/data/sonia/cyclone/{grid}/slp', #'wind10m': '/home/cyclone/wind',
-           'wind': f'/mnt/data/sonia/cyclone/{grid}/wind_500hpa',
+           'wind_500hpa': f'/mnt/data/sonia/cyclone/{grid}/wind_500hpa',
            'temperature': f'/mnt/data/sonia/cyclone/{grid}/temperature',
            'humidity': f'/mnt/data/sonia/cyclone/{grid}/humidity',
            'topo': f'/mnt/data/sonia/cyclone/{grid}/slp/topo.nc'} # where the source data is stored 
@@ -117,7 +117,7 @@ if use_slp:
             return ds.sel(lat=lats, lon=lons, time=time)['slp']
     varfuncs['slp'] = f_slp
 if use_windmag:
-    varnames.append('wind')
+    varnames.append('wind_500hpa')
     def f_wind(ds, lats, lons, time=None):
         if time is None:
             u = ds.sel(lat=lats, lon=lons, pressure_level=500)['u'] # for 10m: [['u10', 'v10']] 
@@ -127,9 +127,9 @@ if use_windmag:
             v = ds.sel(lat=lats, lon=lons, time=time, pressure_level=500)['v']
         windmag = np.sqrt(u**2 + v**2).drop_vars('pressure_level')
         return windmag
-    varfuncs['wind'] = f_wind
+    varfuncs['wind_500hpa'] = f_wind
 if use_winduv:
-    varnames.append('wind')
+    varnames.append('wind_500hpa')
     def f_winduv(ds, lats, lons, time=None):
         # print(ds.sel(lat=lats, lon=lons))
         if time is None:
@@ -138,7 +138,7 @@ if use_winduv:
             data = ds.sel(lat=lats, lon=lons, time=time, pressure_level=500)[['u', 'v']] # for 10m: [['u10', 'v10']] 
         data = data.drop_vars('pressure_level')
         return data
-    varfuncs['wind'] = f_winduv
+    varfuncs['wind_500hpa'] = f_winduv
 if use_temperature:
     varnames.append('temperature')
     def f_temperature(ds, lats, lons, time=None):
@@ -241,11 +241,14 @@ def prep_point_fulldata(frame): # provide actual climate data, not patch plus cl
     else:
         data = data_vars[0]
 
-    new_lat = np.linspace(90,-90, 128) # north to south
-    new_lon = np.linspace(0, 360, 256, endpoint=False)
-    data_resized = data.interp(lat=new_lat, lon=new_lon, method="linear")
+    # new_lat = np.linspace(90,-90, 128) # north to south
+    # new_lon = np.linspace(0, 360, 256, endpoint=False)
+    # data_resized = data.interp(lat=new_lat, lon=new_lon, method="linear")
         
-    result = data_resized.to_array(dim="variable").values.squeeze()
+    # result = data_resized.to_array(dim="variable").values.squeeze()
+    result = data.to_array(dim="variable").values.squeeze()
+    # print(result.shape)
+    
     # print(data_resized, result.shape)
     if frame['split'] == 0:
         np.save(os.path.join(outpath, 'train', f"{frame['sid']}.np"), result)
