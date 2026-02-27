@@ -288,15 +288,15 @@ def sample_loop(config, model, noise_scheduler, dataloader):
             encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda')
         )['images']
         
-        # # output from model is on [-1,1] log scale; convert to [dataset min, dataset max] nonlog
-        images = dataset.denormalize(images.cpu().numpy()) #(images + 1)/2 * (dataset.max - dataset.min) + dataset.min
+        # # output from model is on [-1,1] log scale
+        images = dataset.denormalize(images.cpu().numpy()) # returns B T H W C
         # images = np.expm1(images)
         
         for i, name in enumerate(batch['name']):
             os.makedirs(os.path.join(config['checkpoint_dir'], config['name'], 'samples', name), exist_ok=True)
             for t in range(config['frames']):
                 np.save(os.path.join(config['checkpoint_dir'], config['name'], 'samples', name, f'{t}.npy'), 
-                        images[i, :, t, :, :])
+                        images[i, t, :, :, :])
         
         
 if config['train']:

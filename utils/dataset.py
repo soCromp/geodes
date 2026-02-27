@@ -277,10 +277,12 @@ class VideoDataset(Dataset):
         else:
             x_out = np.clip(x.copy(), -1.0, 1.0)
             
-        x = self.normalizer.denormalize(x)
+        x_denorm = self.normalizer.denormalize(x_out)
         
         # go from B C T H W to B T H W C
         if isinstance(x, torch.Tensor): 
-            x = x.permute(0, 2, 3, 4, 1)
+            x_final = x_denorm.permute(0, 2, 3, 4, 1)
         else:
-            x = np.permute_dims(x, (0, 2, 3, 4, 1))
+            x_final = np.transpose(x_denorm, (0, 2, 3, 4, 1))
+            
+        return x_final
