@@ -26,6 +26,8 @@ elif 'svd' in synth_path:
     method = 'svd'
 elif 'climax' in synth_path:
     method = 'ClimaX'
+elif 'aurora' in synth_path:
+    method = 'aurora'
 elif 'clima' in synth_path:
     method = 'climatology'
 elif 'codicast' in synth_path:
@@ -42,7 +44,7 @@ def load_data(path):
     names = []
     for d in sorted(os.listdir(path)):
         if os.path.isdir(os.path.join(path, d)):
-            assert len(os.listdir(os.path.join(path, d))) == len_datapoint, f"Data point {d} in {path} does not have {len_datapoint} frames"
+            # assert len(os.listdir(os.path.join(path, d))) == len_datapoint, f"Data point {d} in {path} does not have {len_datapoint} frames"
             names.append(d)
             point = [] 
             for i in range(len_datapoint):
@@ -103,8 +105,8 @@ def maxes_histogram(train, synth, ):
     plt.ylabel('Density')
     plt.xlabel(f'Maximum Storm Windspeed (m/s)')
     plt.title(f'Maximum Wind Speed: {method.title()} Synthetic vs Real Storms')
-    plt.savefig(f'{variable}_{split}_{method}.pdf')
-    print('histogram saved to', f'{variable}_{split}_{method}.pdf')
+    plt.savefig(f'plots/{variable}_{split}_{method}.pdf')
+    print('histogram saved to', f'plots/{variable}_{split}_{method}.pdf')
 
 
 def get_psd(train, synth, channel_names, batch_size=64):
@@ -142,9 +144,9 @@ def get_psd(train, synth, channel_names, batch_size=64):
         plt.legend()
         plt.grid(True, which="both", ls="-", alpha=0.5)
         
-        plt.savefig(f'psd_{variable}_{split}_{var_name}_{method}.png')
+        plt.savefig(f'plots/psd_{variable}_{split}_{var_name}_{method}.png')
         plt.close() # Important to close when looping
-        print(f'PSD plot saved for {var_name}:', f'psd_{variable}_{split}_{var_name}_{method}.png')
+        print(f'PSD plot saved for {var_name}:', f'plots/psd_{variable}_{split}_{var_name}_{method}.png')
 
 
 def qq_plot(train, synth, channel_names):
@@ -161,11 +163,11 @@ def qq_plot(train, synth, channel_names):
         train_maxes = t_var.max(axis=(1,2,3))
         synth_maxes = s_var.max(axis=(1,2,3))
         
-        # Dynamic outlier removal: Filter values above the 99.9th percentile of real data
-        # This replaces the hardcoded '150' for all variables
-        threshold = np.percentile(train_maxes, 99.9)
-        train_maxes = train_maxes[train_maxes <= threshold]
-        synth_maxes = synth_maxes[synth_maxes <= threshold]
+        # # Dynamic outlier removal: Filter values above the 99.9th percentile of real data
+        # # This replaces the hardcoded '150' for all variables
+        # threshold = np.percentile(train_maxes, 99.9)
+        # train_maxes = train_maxes[train_maxes <= threshold]
+        # synth_maxes = synth_maxes[synth_maxes <= threshold]
         
         quantiles = np.linspace(0, 100, 1000)
         q_real = np.percentile(train_maxes, quantiles)
@@ -187,9 +189,9 @@ def qq_plot(train, synth, channel_names):
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         
-        plt.savefig(f'qq_{variable}_{split}_{var_name}_{method}.png')
+        plt.savefig(f'plots/qq_{variable}_{split}_{var_name}_{method}.png')
         plt.close()
-        print(f'Q-Q plot saved for {var_name}:', f'qq_{variable}_{split}_{var_name}_{method}.png')
+        print(f'Q-Q plot saved for {var_name}:', f'plots/qq_{variable}_{split}_{var_name}_{method}.png')
     
     
 def plot_temporal_jitter(train_wind, synth_wind):
@@ -211,8 +213,8 @@ def plot_temporal_jitter(train_wind, synth_wind):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f'temporal_jitter_{method}.png')
-    print("Saved temporal jitter plot:", f'temporal_jitter_{method}.png')
+    plt.savefig(f'plots/temporal_jitter_{method}.png')
+    print("Saved temporal jitter plot:", f'plots/temporal_jitter_{method}.png')
     
     
 def plot_wind_pressure_relationship(train_data, synth_data):
@@ -243,8 +245,8 @@ def plot_wind_pressure_relationship(train_data, synth_data):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f'wind_pressure_{method}.png')
-    print("Saved wind_pressure plot:", f'wind_pressure_{method}.png')
+    plt.savefig(f'plots/wind_pressure_{method}.png')
+    print("Saved wind_pressure plot:", f'plots/wind_pressure_{method}.png')
     
     
 def plot_eye_wobble(train_data, synth_data):
@@ -291,15 +293,23 @@ def plot_eye_wobble(train_data, synth_data):
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(f'eye_wobble_{method}.png')
-    print("Saved eye_wobble plot:", f'eye_wobble_{method}.png')
+    plt.savefig(f'plots/eye_wobble_{method}.png')
+    print("Saved eye_wobble plot:", f'plots/eye_wobble_{method}.png')
     
 
 train = load_data(train_path)
 synth = load_data(synth_path)
-# synth['data'] = np.expm1(synth['data'])
+
+if synth['data'].shape[2] == len(channel_names):
+    synth['data'] = np.transpose(synth['data'], (0, 1, 3, 4, 2))
 
 print('train', train['data'].shape, 'synth', synth['data'].shape)
+print('train min:', train['data'].min(axis=(0,1,2,3)))
+print('synth min:', synth['data'].min(axis=(0,1,2,3)))
+print('train mean:', train['data'].mean(axis=(0,1,2,3)))
+print('synth mean:', synth['data'].mean(axis=(0,1,2,3)))
+print('train max:', train['data'].max(axis=(0,1,2,3)))
+print('synth max:', synth['data'].max(axis=(0,1,2,3)))
 
 ####### Noise baseline for FVD and KVD
 print('computing FVD, KVD for equal splits of train (noise baseline)')

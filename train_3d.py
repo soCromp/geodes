@@ -31,11 +31,13 @@ def get_args():
     parser.add_argument('--image_size', type=int, default=32, help='the height and the width of the images')
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--eval_batch_size', type=int, default=8)
-    parser.add_argument('--epochs', '-e', type=int, default=250, help='if train=True, total number of epochs to train for')
+    parser.add_argument('--epochs', '-e', type=int, default=20, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
     parser.add_argument('--lr', type=float, default=1e-7)
     parser.add_argument('--lr_warmup_steps', type=int, default=0)
-    parser.add_argument('--save_image_epochs', type=int, default=10, help='how often to sample (eval) during training')
+    parser.add_argument('--patience', type=int, default=5, help='Stop if no improvement for 5 epochs')
+    parser.add_argument('--min_delta', type=float, default=1e-6)
+    parser.add_argument('--save_image_epochs', type=int, default=10, help='obsolete')
     parser.add_argument('--save_model_epochs', type=int, default=10, help='how often to save model during training')
     parser.add_argument('--name', type=str, default='debug3d', help='name of this run. Directory will be checkpoint_dir+name')
     parser.add_argument('--checkpoint_dir', type=str, default='/mnt/data/sonia/cyclone/checkpoints')
@@ -215,6 +217,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
     model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         model, optimizer, train_dataloader, lr_scheduler
     )
+    
+    best_loss = float('inf')
+    patience_counter = 0
         
     global_step = 0
     for epoch in range(start_epoch, config['epochs']):
@@ -256,22 +261,42 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             global_step += 1
             
         loss = np.mean(losses)
-        wandb.log({'epoch_loss': loss, 'epoch': epoch}, step=global_step)
+        # early stopping stuff
+        if loss < best_loss - config['min_delta']:
+            best_loss = loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if accelerator.is_main_process:
+                print(f"Epoch {epoch}: No improvement. Patience: {patience_counter}/{config['patience']}")
+        
+        wandb.log({'epoch_loss': loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
         progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
         with open(os.path.join(config['checkpoint_dir'], config['name'], 'train_log.txt'), 'a') as f:
             f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
             
+        if patience_counter >= config['patience']:
+            if accelerator.is_main_process:
+                print(f"Early stopping triggered at epoch {epoch}. Best Loss: {best_loss}")
+            break
+            
         # sample demo images, save model
         if accelerator.is_main_process:
-            sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
-            sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
-            pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
-                                             scheduler=sample_noise_scheduler)
-            # if (epoch + 1) % config['save_image_epochs'] == 0: # IMAGE
-            #     # get just the first time step/prompt frame
-            #     evaluate(batch["pixel_values"][:, :, 0, :, :], config, epoch, pipeline, accelerator.device)
-            if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['epochs'] - 1: # MODEL
+            if (epoch + 1) % config['save_model_epochs'] == 0: 
+                sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
+                sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
+                pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
+                                                scheduler=sample_noise_scheduler)
                 pipeline.save_pretrained(os.path.join(config['checkpoint_dir'], config['name']))
+                
+    # final save
+    if accelerator.is_main_process:
+        sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
+        sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
+        pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
+                                        scheduler=sample_noise_scheduler)
+        pipeline.save_pretrained(os.path.join(config['checkpoint_dir'], config['name']))
+        
         
         
 def sample_loop(config, model, noise_scheduler, dataloader):

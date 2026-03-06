@@ -32,11 +32,13 @@ def get_args():
     parser.add_argument('--image_size', type=int, default=32, help='the height and the width of the images')
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--eval_batch_size', type=int, default=8)
-    parser.add_argument('--epochs', '-e', type=int, default=250, help='if train=True, total number of epochs to train for')
+    parser.add_argument('--epochs', '-e', type=int, default=20, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
     parser.add_argument('--lr', '-lr', type=float, default=1e-7)
     parser.add_argument('--lr_warmup_steps', type=int, default=0)
-    parser.add_argument('--save_image_epochs', type=int, default=10, help='how often to sample (eval) during training')
+    parser.add_argument('--patience', type=int, default=5, help='Stop if no improvement for 5 epochs')
+    parser.add_argument('--min_delta', type=float, default=1e-6)
+    parser.add_argument('--save_image_epochs', type=int, default=10, help='obsolete')
     parser.add_argument('--save_model_epochs', type=int, default=10, help='how often to save model during training')
     parser.add_argument('--name', type=str, default='debug2d', 
                         help='name of this run. Directory will be checkpoint_dir+name and wandb will use this name')
@@ -175,6 +177,9 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         model, optimizer, train_dataloader, lr_scheduler
     )
     
+    best_loss = float('inf')
+    patience_counter = 0
+    
     global_step = 0
     for epoch in range(last_epoch, config['epochs']):
         progress_bar = tqdm(total=len(train_dataloader), disable=not accelerator.is_local_main_process)
@@ -213,18 +218,39 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             global_step += 1
             
         loss = np.mean(losses)
-        wandb.log({'epoch_loss': loss, 'epoch': epoch}, step=global_step)
+        
+        # early stopping stuff
+        if loss < best_loss - config['min_delta']:
+            best_loss = loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if accelerator.is_main_process:
+                print(f"Epoch {epoch}: No improvement. Patience: {patience_counter}/{config['patience']}")
+                
+        wandb.log({'epoch_loss': loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
         progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
         with open(os.path.join(output_dir, 'train_log.txt'), 'a') as f:
             f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
+                
+        if patience_counter >= config['patience']:
+            if accelerator.is_main_process:
+                print(f"Early stopping triggered at epoch {epoch}. Best Loss: {best_loss}")
+            break
         
         # sample demo images, save model
         if accelerator.is_main_process:
-            pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
             if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['epochs'] - 1:
+                pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
                 evaluate(config, epoch, pipeline)
-            if (epoch + 1) % config['save_model_epochs'] == 0 or epoch == config['epochs'] - 1:
+            if (epoch + 1) % config['save_model_epochs'] == 0:
+                pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
                 pipeline.save_pretrained(output_dir)
+                
+    # final save 
+    if accelerator.is_main_process:
+        pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
+        pipeline.save_pretrained(output_dir)
             
 
 def sample_loop(config, model, noise_scheduler):
