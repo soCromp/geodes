@@ -70,7 +70,7 @@ output_dir = os.path.join(args.checkpoint_dir, args.name)
 
     
 dataset = ImageDataset(dataset=config['dataset'])
-dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True)
+dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True)
 
 
 # create the model
