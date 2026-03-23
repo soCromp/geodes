@@ -218,7 +218,8 @@ class ImageDataset(Dataset):
     
 class VideoDataset(Dataset):
     def __init__(self, dataset, 
-                 width=32, height=32, sample_frames=8):
+                 width=32, height=32, sample_frames=8,
+                 start_idx=0, end_idx=None):
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
@@ -227,6 +228,10 @@ class VideoDataset(Dataset):
         self.base_folder = dataset
         self.folders = [f for f in os.listdir(self.base_folder) if \
             os.path.isdir(os.path.join(self.base_folder, f))]#[:10]
+        self.folders = sorted(self.folders)
+        if end_idx is None:
+            end_idx = len(self.folders)
+        self.folders = self.folders[start_idx:end_idx]
         
         data = [] # want B C T H W
         for folder in self.folders:

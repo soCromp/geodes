@@ -50,6 +50,10 @@ def get_args():
     parser.add_argument('--img_model', type=str, 
                         default=None, help='if training video from scratch, builds from this image model')
     parser.add_argument('--correlated_noise', type=float, default=0.95, help='0 is iid noise')
+    parser.add_argument('--start_idx', type=int, default=0,
+                        help='start sample index for sharded sampling')
+    parser.add_argument('--end_idx', type=int, default=None,
+                        help='end sample index (exclusive) for sharded sampling')
     # parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
     args = parser.parse_args()
     return args
@@ -67,7 +71,8 @@ except:
 
 
 dataset = VideoDataset(dataset=config['dataset'], sample_frames=config['frames'],
-                       width=config['image_size'], height=config['image_size'])
+                       width=config['image_size'], height=config['image_size'],
+                       start_idx=config['start_idx'], end_idx=config['end_idx'])
 if args.train:
     dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True,) # otherwise crashes on last batch
 else:
