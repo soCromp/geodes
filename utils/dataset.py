@@ -161,7 +161,7 @@ class HybridNormalizer:
     
 
 class ImageDataset(Dataset):
-    def __init__(self, dataset, width=32, height=32, sample_frames=8):
+    def __init__(self, dataset, width=32, height=32, sample_frames=8, flip=False):
         """
         Args:
             num_samples (int): Number of samples in the dataset.
@@ -184,11 +184,23 @@ class ImageDataset(Dataset):
         if self.data.ndim == 3:
             self.data = np.expand_dims(self.data, axis=1) # add channel dim if missing
         else:
-            self.data = np.transpose(self.data, (0, 3, 1, 2))
+            self.data = np.transpose(self.data, (0, 3, 1, 2)) # result is B C H W
         assert self.data.shape[2] == self.height and self.data.shape[3] == self.width
         
         with open(os.path.join(self.base_folder, '../channels.txt'), 'r') as f:
             self.channel_names = [line.strip() for line in f.readlines()]
+            
+        self.flip = flip 
+        if self.flip:
+            if isinstance(self.data, np.ndarray):
+                self.data = np.flip(self.data, axis=-2)
+            elif isinstance(self.data, torch.Tensor):
+                self.data = torch.flip(self.data, dims=[-2])
+                
+            # also need to negate V component, if present 
+            if 'wind-v' in self.channel_names or 'v' in self.channel_names:
+                v_idx = self.channel_names.index('wind-v') if 'wind-v' in self.channel_names else self.channel_names.index('v')
+                self.data[:, v_idx, ...] *= -1
             
         self.channels = len(self.channel_names) # convenience variable
         self.normalizer = HybridNormalizer(self.channel_names)
@@ -219,7 +231,7 @@ class ImageDataset(Dataset):
 class VideoDataset(Dataset):
     def __init__(self, dataset, 
                  width=32, height=32, sample_frames=8,
-                 start_idx=0, end_idx=None):
+                 start_idx=0, end_idx=None, flip=False):
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
@@ -249,6 +261,18 @@ class VideoDataset(Dataset):
         
         with open(os.path.join(self.base_folder, '../channels.txt'), 'r') as f:
             self.channel_names = [line.strip() for line in f.readlines()]
+            
+        self.flip = flip 
+        if self.flip:
+            if isinstance(self.data, np.ndarray):
+                self.data = np.flip(self.data, axis=-2)
+            elif isinstance(self.data, torch.Tensor):
+                self.data = torch.flip(self.data, dims=[-2])
+                
+            # also need to negate V component, if present 
+            if 'wind-v' in self.channel_names or 'v' in self.channel_names:
+                v_idx = self.channel_names.index('wind-v') if 'wind-v' in self.channel_names else self.channel_names.index('v')
+                self.data[:, v_idx, ...] *= -1
             
         self.channels = len(self.channel_names) # convenience variable
         self.normalizer = HybridNormalizer(self.channel_names)

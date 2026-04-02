@@ -30,7 +30,9 @@ def get_args():
     parser.add_argument('--train', '-t', action="store_true")
     parser.add_argument('--image_size', type=int, default=32, help='the height and the width of the images')
     parser.add_argument('--train_batch_size', type=int, default=8)
-    parser.add_argument('--eval_batch_size', type=int, default=8)
+    parser.add_argument('--eval_batch_size', type=int, default=8, 
+                        help='if sampling, the sample batch size. If training and if val dataset provided, the validation batch size')
+    parser.add_argument('--max_val_steps', type=int, default=8, help='max number of batches to run during validation')
     parser.add_argument('--epochs', '-e', type=int, default=20, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
     parser.add_argument('--lr', type=float, default=1e-7)
@@ -39,10 +41,15 @@ def get_args():
     parser.add_argument('--min_delta', type=float, default=1e-6)
     parser.add_argument('--save_image_epochs', type=int, default=10, help='obsolete')
     parser.add_argument('--save_model_epochs', type=int, default=10, help='how often to save model during training')
+    parser.add_argument('--validation_epochs', type=int, default=10, help='how often to perform validation during training')
     parser.add_argument('--name', type=str, default='debug3d', help='name of this run. Directory will be checkpoint_dir+name')
     parser.add_argument('--checkpoint_dir', type=str, default='/mnt/data/sonia/cyclone/checkpoints')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--dataset', '-d', type=str, required=True, help='path to training data, or val data for sampling')
+    parser.add_argument('--dataset', '-d', type=str, required=True, help='path to training data, or prompt data for sampling')
+    parser.add_argument('--val_dataset', '-v', type=str, required=False, default=None,
+                        help='path to validation data (training only -- does nothing for sampling runs)')
+    parser.add_argument('--val_flip', action='store_true', default=True,
+                        help='if true, flip N/S the val data (useful if validating on different hemisphere than training)')
     parser.add_argument('--channels', type=int, default=1)
     parser.add_argument('--frames', type=int, default=8)
     parser.add_argument('--continue', action='store_true', 
@@ -77,6 +84,13 @@ if args.train:
     dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True,) # otherwise crashes on last batch
 else:
     dataloader = DataLoader(dataset, batch_size=config['eval_batch_size'], shuffle=False,) 
+    
+val_dataloader = None
+if config['val_datasets'] is not None and config['train']:
+    val_dataset = VideoDataset(dataset=config['val_dataset'], sample_frames=config['frames'],
+                                width=config['image_size'], height=config['image_size'],
+                                val_flip=config['val_flip'])
+    val_dataloader = DataLoader(val_dataset, batch_size=config['eval_batch_size'], shuffle=True, drop_last=True) 
 
 def image_to_video_model(config, time_avg=True):
     # 1) load 2-D UNet and grab its config
@@ -186,7 +200,7 @@ class CondDiffusionPipeline(DiffusionPipeline):
         return {"images": sample.cpu()}
  
     
-def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler):
+def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_dataloader, lr_scheduler):
     accelerator = Accelerator(
         gradient_accumulation_steps=config['gradient_accumulation_steps'],
         log_with="wandb",
@@ -219,8 +233,8 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         wandb.init(mode="disabled")
         
     
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+    model, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, val_dataloader, lr_scheduler
     )
     
     best_loss = float('inf')
@@ -275,10 +289,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             if accelerator.is_main_process:
                 print(f"Epoch {epoch}: No improvement. Patience: {patience_counter}/{config['patience']}")
         
-        wandb.log({'epoch_loss': loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
-        progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
-        with open(os.path.join(config['checkpoint_dir'], config['name'], 'train_log.txt'), 'a') as f:
-            f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
+        if accelerator.is_main_process:
+            wandb.log({'epoch_loss': loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
+            progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
+            with open(os.path.join(config['checkpoint_dir'], config['name'], 'train_log.txt'), 'a') as f:
+                f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
             
         if patience_counter >= config['patience']:
             if accelerator.is_main_process:
@@ -286,13 +301,52 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             break
             
         # sample demo images, save model
-        if accelerator.is_main_process:
-            if (epoch + 1) % config['save_model_epochs'] == 0: 
+        if (epoch + 1) % config['save_model_epochs'] == 0 and accelerator.is_main_process: 
                 sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
                 sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
                 pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).to(accelerator.device), 
                                                 scheduler=sample_noise_scheduler)
                 pipeline.save_pretrained(os.path.join(config['checkpoint_dir'], config['name']))
+        if (epoch + 1) % config['validation_epochs'] == 0 and config['val_dataset'] is not None:
+            model.eval() # Switch to evaluation mode
+            val_losses = []
+            with torch.no_grad():
+                for val_step, val_batch in enumerate(val_dataloader):
+                    if config['max_val_steps'] is not None and val_step >= config['max_val_steps']:
+                        break
+                    
+                    clean_images = torch.as_tensor(val_batch["pixel_values"], 
+                                                    device=accelerator.device, dtype=config['dtype'])
+                    bs = clean_images.shape[0]
+                    zeros = torch.zeros((bs, 1, cross_attention_dim), 
+                                        device=accelerator.device, dtype=config['dtype'])
+                    
+                    # Generate noise and timesteps identically to training
+                    noise = noisef(clean_images.shape, rho=config['correlated_noise'], 
+                                    device=clean_images.device, dtype=config['dtype'])
+                    
+                    timesteps = torch.randint(
+                        0, noise_scheduler.config['num_train_timesteps'], (bs,), 
+                        device=clean_images.device, dtype=torch.int64
+                    )
+                    noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+                    
+                    # Forward pass
+                    noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros, return_dict=False)[0]
+                    v_loss = F.mse_loss(noise_pred, noise)
+                    
+                    # Gather losses across all GPUs if doing distributed training
+                    gathered_v_loss = accelerator.gather(v_loss.unsqueeze(0)).mean().item()
+                    val_losses.append(gathered_v_loss)
+                    
+                    
+            val_loss = np.mean(val_losses)
+            model.train()
+            if accelerator.is_main_process:
+                wandb.log({'val_loss': val_loss, 'epoch': epoch}, step=global_step)
+                with open(os.path.join(config['checkpoint_dir'], config['name'], 'train_log.txt'), 'a') as f:
+                    f.write(f"Epoch {epoch}, Step {global_step}, Val Loss: {val_loss}\n")
+                    
                 
     # final save
     if accelerator.is_main_process:
@@ -336,7 +390,7 @@ if config['train']:
     #     config=config,
     # )
     print('noise scheduler config:\n', noise_scheduler.config)
-    train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
+    train_loop(config, unet, noise_scheduler, optimizer, dataloader, val_dataloader, lr_scheduler)
 else:
     print(unet)
     # redefine to deterministic for sampling: (avoid frame 2 noise)

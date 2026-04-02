@@ -31,7 +31,9 @@ def get_args():
     parser.add_argument('--train', '-t', action='store_true')
     parser.add_argument('--image_size', type=int, default=32, help='the height and the width of the images')
     parser.add_argument('--train_batch_size', type=int, default=8)
-    parser.add_argument('--eval_batch_size', type=int, default=8)
+    parser.add_argument('--eval_batch_size', type=int, default=8, 
+                        help='if sampling, the sample batch size. If training and if val dataset provided, the validation batch size')
+    parser.add_argument('--max_val_steps', type=int, default=8, help='max number of batches to run during validation')
     parser.add_argument('--epochs', '-e', type=int, default=20, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
     parser.add_argument('--lr', '-lr', type=float, default=1e-7)
@@ -40,11 +42,16 @@ def get_args():
     parser.add_argument('--min_delta', type=float, default=1e-6)
     parser.add_argument('--save_image_epochs', type=int, default=10, help='obsolete')
     parser.add_argument('--save_model_epochs', type=int, default=10, help='how often to save model during training')
+    parser.add_argument('--validation_epochs', type=int, default=10, help='how often to perform validation during training')
     parser.add_argument('--name', type=str, default='debug2d', 
                         help='name of this run. Directory will be checkpoint_dir+name and wandb will use this name')
     parser.add_argument('--checkpoint_dir', type=str, default='/hdd3/sonia/cycloneSVD/checkpoints')
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--dataset', '-d', type=str, required=True, help='path to training data, or val data for sampling')
+    parser.add_argument('--dataset', '-d', type=str, required=True, help='path to training data, or prompt data for sampling')
+    parser.add_argument('--val_dataset', '-v', type=str, required=False, default=None,
+                        help='path to validation data (training only -- does nothing for sampling runs)')
+    parser.add_argument('--val_flip', action='store_true', default=True,
+                        help='if true, flip N/S the val data (useful if validating on different hemisphere than training)')
     parser.add_argument('--continue', type=bool, default=False, 
                         help='if true and training true, attempt to resume training. uses training configs specified here')
     parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
@@ -71,6 +78,11 @@ output_dir = os.path.join(args.checkpoint_dir, args.name)
     
 dataset = ImageDataset(dataset=config['dataset'])
 dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True)
+
+val_dataloader = None
+if config['val_dataset'] is not None:
+    val_dataset = ImageDataset(dataset=config['val_dataset'], flip=config['val_flip'])
+    val_dataloader = DataLoader(val_dataset, batch_size=config['eval_batch_size'], shuffle=True, drop_last=True)
 
 
 # create the model
@@ -131,30 +143,30 @@ class CondDiffusionPipeline(DiffusionPipeline):
         return {"images": sample.cpu()}
         
 
-def evaluate(config, epoch, pipeline):
-    # Sample some images from random noise (this is the backward diffusion process).
-    images = pipeline(
-        batch_size=config['eval_batch_size'],
-        generator=torch.Generator(device='cuda').manual_seed(config['seed']), 
-        encoder_hidden_states=zeros.to('cuda'),
-        # Use a separate torch generator to avoid rewinding the random state of the main training loop
-    )['images']
+# def evaluate(config, epoch, pipeline):
+#     # Sample some images from random noise (this is the backward diffusion process).
+#     images = pipeline(
+#         batch_size=config['eval_batch_size'],
+#         generator=torch.Generator(device='cuda').manual_seed(config['seed']), 
+#         encoder_hidden_states=zeros.to('cuda'),
+#         # Use a separate torch generator to avoid rewinding the random state of the main training loop
+#     )['images']
     
-    test_dir = os.path.join(output_dir, "train_samples", str(epoch))
-    os.makedirs(test_dir, exist_ok=True)
+#     test_dir = os.path.join(output_dir, "train_samples", str(epoch))
+#     os.makedirs(test_dir, exist_ok=True)
     
-    for i in range(config['eval_batch_size']):
-        # output from model is *tensor* [channels, height, width]
-        # on [-1,1]  scale; we will convert to [0,255] for visualization
-        channel_frames = [np.asarray(images[i][c]) for c in range(dataset.channels)]
-        channel_frames = [Image.fromarray(255/2*(frame+1)) for frame in channel_frames]
+#     for i in range(config['eval_batch_size']):
+#         # output from model is *tensor* [channels, height, width]
+#         # on [-1,1]  scale; we will convert to [0,255] for visualization
+#         channel_frames = [np.asarray(images[i][c]) for c in range(dataset.channels)]
+#         channel_frames = [Image.fromarray(255/2*(frame+1)) for frame in channel_frames]
 
-        # Make a grid out of the images
-        image_grid = make_image_grid(channel_frames, rows=1, cols=len(channel_frames))
-        image_grid.save(f"{test_dir}/{i}.png")
+#         # Make a grid out of the images
+#         image_grid = make_image_grid(channel_frames, rows=1, cols=len(channel_frames))
+#         image_grid.save(f"{test_dir}/{i}.png")
 
 
-def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_scheduler):
+def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_dataloader, lr_scheduler):
     accelerator = Accelerator(
         gradient_accumulation_steps=config['gradient_accumulation_steps'],
         log_with="wandb",
@@ -164,17 +176,17 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
         os.makedirs(output_dir, exist_ok=True)
         accelerator.init_trackers("train_example")
         
-    env_file_path = os.path.join(output_dir, 'environment.yml')
-    subprocess.run(f"conda env export > {env_file_path}", shell=True)
-    artifact = wandb.Artifact("conda-env", type="environment")
-    artifact.add_file(env_file_path)
-    wandb.log_artifact(artifact)
-    
-    with open(os.path.join(output_dir, 'config.txt'), 'w') as f:
-        json.dump(config, f, indent=4)
+        env_file_path = os.path.join(output_dir, 'environment.yml')
+        subprocess.run(f"conda env export > {env_file_path}", shell=True)
+        artifact = wandb.Artifact("conda-env", type="environment")
+        artifact.add_file(env_file_path)
+        wandb.log_artifact(artifact)
         
-    model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, lr_scheduler
+        with open(os.path.join(output_dir, 'config.txt'), 'w') as f:
+            json.dump(config, f, indent=4)
+        
+    model, optimizer, train_dataloader, val_dataloader, lr_scheduler = accelerator.prepare(
+        model, optimizer, train_dataloader, val_dataloader, lr_scheduler
     )
     
     best_loss = float('inf')
@@ -197,6 +209,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
                 dtype=torch.int64
             )
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+            zeros = torch.zeros((bs, 1, config['unet_cross_attention_dim']), device=clean_images.device, dtype=clean_images.dtype)
             
             with accelerator.accumulate(model):
                 # Predict the noise residual
@@ -227,11 +240,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             patience_counter += 1
             if accelerator.is_main_process:
                 print(f"Epoch {epoch}: No improvement. Patience: {patience_counter}/{config['patience']}")
-                
-        wandb.log({'epoch_loss': loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
-        progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
-        with open(os.path.join(output_dir, 'train_log.txt'), 'a') as f:
-            f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
+           
+        if accelerator.is_main_process:     
+            wandb.log({'epoch_loss': loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
+            progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
+            with open(os.path.join(output_dir, 'train_log.txt'), 'a') as f:
+                f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
                 
         if patience_counter >= config['patience']:
             if accelerator.is_main_process:
@@ -239,13 +253,40 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, lr_s
             break
         
         # sample demo images, save model
-        if accelerator.is_main_process:
-            if (epoch + 1) % config['save_image_epochs'] == 0 or epoch == config['epochs'] - 1:
-                pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
-                evaluate(config, epoch, pipeline)
-            if (epoch + 1) % config['save_model_epochs'] == 0:
-                pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
-                pipeline.save_pretrained(output_dir)
+        if (epoch + 1) % config['save_model_epochs'] == 0 and accelerator.is_main_process:
+            pipeline = CondDiffusionPipeline(unet=accelerator.unwrap_model(model).cuda(), scheduler=noise_scheduler)
+            pipeline.save_pretrained(output_dir)
+        if (epoch + 1) % config['validation_epochs'] == 0 and config['val_dataset'] is not None:
+            model.eval() # Switch to evaluation mode
+            val_losses = []
+            with torch.no_grad():
+                for val_step, val_batch in enumerate(val_dataloader):
+                    if config['max_val_steps'] is not None and val_step >= config['max_val_steps']:
+                        break
+                    
+                    clean_images = val_batch['pixel_values']
+                    bs = clean_images.shape[0]
+                    noise = torch.randn(clean_images.shape, device=clean_images.device)
+                    timesteps = torch.randint(
+                        0, noise_scheduler.config['num_train_timesteps'], (bs,), device=clean_images.device,
+                        dtype=torch.int64
+                    )
+                    noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+                    zeros = zeros = torch.zeros((bs, 1, config['unet_cross_attention_dim']), 
+                                                device=clean_images.device, dtype=clean_images.dtype)
+                    noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros.to(clean_images.device), return_dict=False)[0]
+                    v_loss = F.mse_loss(noise_pred, noise)
+                    
+                    gathered_v_loss = accelerator.gather(v_loss.unsqueeze(0)).mean().item()
+                    val_losses.append(gathered_v_loss)
+                    
+            val_loss = np.mean(val_losses)
+            model.train()
+            if accelerator.is_main_process:
+                wandb.log({'val_loss': val_loss, 'epoch': epoch}, step=global_step)
+                with open(os.path.join(output_dir, 'train_log.txt'), 'a') as f:
+                    f.write(f"Epoch {epoch}, Step {global_step}, Val Loss: {val_loss}\n")
+                
                 
     # final save 
     if accelerator.is_main_process:
@@ -286,7 +327,7 @@ if config['train']:
         config=config,
         group = '2d'
     )
-    train_loop(config, unet, noise_scheduler, optimizer, dataloader, lr_scheduler)
+    train_loop(config, unet, noise_scheduler, optimizer, dataloader, val_dataloader, lr_scheduler)
 
 if config['sample'] > 0:
     sample_loop(config, unet, noise_scheduler)
