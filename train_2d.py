@@ -33,7 +33,7 @@ def get_args():
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--eval_batch_size', type=int, default=8, 
                         help='if sampling, the sample batch size. If training and if val dataset provided, the validation batch size')
-    parser.add_argument('--max_val_steps', type=int, default=8, help='max number of batches to run during validation')
+    parser.add_argument('--max_val_steps', type=int, default=100, help='max number of batches to run during validation')
     parser.add_argument('--epochs', '-e', type=int, default=20, help='if train=True, total number of epochs to train for')
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
     parser.add_argument('--lr', '-lr', type=float, default=1e-7)
