@@ -308,6 +308,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
                                                 scheduler=sample_noise_scheduler)
                 pipeline.save_pretrained(os.path.join(config['checkpoint_dir'], config['name']))
         if (epoch + 1) % config['validation_epochs'] == 0 and config['val_dataset'] is not None:
+            if config['max_val_steps'] is not None:
+                progress_bar = tqdm(total=config['max_val_steps'], disable=not accelerator.is_local_main_process)
+            else:
+                progress_bar = tqdm(total=len(val_dataloader), disable=not accelerator.is_local_main_process)
+            progress_bar.set_description(f"Val Epoch {epoch}")
             model.eval() # Switch to evaluation mode
             val_losses = []
             with torch.no_grad():
@@ -338,6 +343,8 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
                     # Gather losses across all GPUs if doing distributed training
                     gathered_v_loss = accelerator.gather(v_loss.unsqueeze(0)).mean().item()
                     val_losses.append(gathered_v_loss)
+                    progress_bar.update(1)
+                    progress_bar.set_postfix(**{"loss": gathered_v_loss, "step": val_step})
                     
                     
             val_loss = np.mean(val_losses)
