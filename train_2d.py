@@ -57,6 +57,8 @@ def get_args():
     parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
     parser.add_argument('--loss_fn', type=str, default='mse', choices=['mse', 'l1', 'huber'], 
                         help='Loss function to use (mse, l1, or huber)')
+    parser.add_argument('--snr_gamma', type=float, default=None, 
+                        help='SNR weighting gamma for loss balancing. Recommended value is 5.0.')
     parser.add_argument('--huber_delta', type=float, default=1.0, help='delta value for huber loss (only used if loss_fn is huber)')
     
     parser.add_argument('--unet_layers_per_block', type=int, default=2, help='number of conv layers per unet block')
@@ -223,7 +225,25 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
             with accelerator.accumulate(model):
                 # Predict the noise residual
                 noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros.to(clean_images.device), return_dict=False)[0]
-                loss = loss_fn(noise_pred, noise)
+                loss = loss_fn(noise_pred, noise, reduction="none")
+                loss = loss.view(bs, -1).mean(dim=1) # average over all non-batch dims
+                
+                # min-snr weighting, if using
+                if config.get('snr_gamma') is not None:
+                    alphas_cumprod = noise_scheduler.alphas_cumprod.to(loss.device)
+                    alpha_t = alphas_cumprod[timesteps]
+                    
+                    # Compute Signal-to-Noise Ratio (SNR) for the sampled timesteps
+                    snr = alpha_t / (1.0 - alpha_t)
+                    
+                    # Calculate Min-SNR weights: min(SNR, gamma) / SNR
+                    snr_weight = torch.clamp(snr, max=config['snr_gamma']) / snr
+                    
+                    # Multiply the per-item loss by its timestep weight
+                    loss = loss * snr_weight
+                    
+                    
+                loss = loss.mean() # now full average to get single scalar
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
