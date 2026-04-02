@@ -61,7 +61,7 @@ def get_args():
                         help='Loss function to use (mse, l1, or huber)')
     parser.add_argument('--huber_delta', type=float, default=1.0, help='delta value for huber loss (only used if loss_fn is huber)')
     parser.add_argument('--snr_gamma', type=float, default=None, 
-                        help='SNR weighting gamma for loss balancing. Recommended value is 5.0.')
+                        help='SNR weighting gamma for loss balancing. Recommended value is 5.0 if using.')
     parser.add_argument('--start_idx', type=int, default=0,
                         help='start sample index for sharded sampling')
     parser.add_argument('--end_idx', type=int, default=None,
@@ -247,7 +247,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
         loss_fn = F.l1_loss
     elif config['loss_fn'] == 'huber':
         delta_val = config.get('huber_delta', 1.0) 
-        loss_fn = lambda a, b: F.huber_loss(a, b, delta=delta_val)
+        loss_fn = lambda a, b, **kwargs: F.huber_loss(a, b, delta=delta_val, **kwargs)
     best_loss = float('inf')
     patience_counter = 0
         

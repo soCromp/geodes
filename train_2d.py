@@ -57,9 +57,9 @@ def get_args():
     parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
     parser.add_argument('--loss_fn', type=str, default='mse', choices=['mse', 'l1', 'huber'], 
                         help='Loss function to use (mse, l1, or huber)')
+    parser.add_argument('--huber_delta', type=float, default=1.0, help='delta value for huber loss (only used if loss_fn is huber)')
     parser.add_argument('--snr_gamma', type=float, default=None, 
                         help='SNR weighting gamma for loss balancing. Recommended value is 5.0.')
-    parser.add_argument('--huber_delta', type=float, default=1.0, help='delta value for huber loss (only used if loss_fn is huber)')
     
     parser.add_argument('--unet_layers_per_block', type=int, default=2, help='number of conv layers per unet block')
     parser.add_argument('--unet_block_out_channels', type=comma_separated_ints, default=[32, 64, 128], help='number of channels for unet blocks')
@@ -199,7 +199,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
         loss_fn = F.l1_loss
     elif config['loss_fn'] == 'huber':
         delta_val = config.get('huber_delta', 1.0) 
-        loss_fn = lambda a, b: F.huber_loss(a, b, delta=delta_val)
+        loss_fn = lambda a, b, **kwargs: F.huber_loss(a, b, delta=delta_val, **kwargs)
     best_loss = float('inf')
     patience_counter = 0
     
