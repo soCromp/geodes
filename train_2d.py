@@ -272,7 +272,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
                         dtype=torch.int64
                     )
                     noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
-                    zeros = zeros = torch.zeros((bs, 1, config['unet_cross_attention_dim']), 
+                    zeros = torch.zeros((bs, 1, config['unet_cross_attention_dim']), 
                                                 device=clean_images.device, dtype=clean_images.dtype)
                     noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros.to(clean_images.device), return_dict=False)[0]
                     v_loss = F.mse_loss(noise_pred, noise)

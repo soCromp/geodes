@@ -86,10 +86,10 @@ else:
     dataloader = DataLoader(dataset, batch_size=config['eval_batch_size'], shuffle=False,) 
     
 val_dataloader = None
-if config['val_datasets'] is not None and config['train']:
+if config['val_dataset'] is not None and config['train']:
     val_dataset = VideoDataset(dataset=config['val_dataset'], sample_frames=config['frames'],
                                 width=config['image_size'], height=config['image_size'],
-                                val_flip=config['val_flip'])
+                                flip=config['val_flip'])
     val_dataloader = DataLoader(val_dataset, batch_size=config['eval_batch_size'], shuffle=True, drop_last=True) 
 
 def image_to_video_model(config, time_avg=True):
