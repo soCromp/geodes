@@ -57,6 +57,9 @@ def get_args():
     parser.add_argument('--img_model', type=str, 
                         default=None, help='if training video from scratch, builds from this image model')
     parser.add_argument('--correlated_noise', type=float, default=0.95, help='0 is iid noise')
+    parser.add_argument('--loss_fn', type=str, default='mse', choices=['mse', 'l1', 'huber'], 
+                        help='Loss function to use (mse, l1, or huber)')
+    parser.add_argument('--huber_delta', type=float, default=1.0, help='delta value for huber loss (only used if loss_fn is huber)')
     parser.add_argument('--start_idx', type=int, default=0,
                         help='start sample index for sharded sampling')
     parser.add_argument('--end_idx', type=int, default=None,
@@ -237,6 +240,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
         model, optimizer, train_dataloader, val_dataloader, lr_scheduler
     )
     
+    loss_fn = F.mse_loss
+    if config['loss_fn'] == 'l1':
+        loss_fn = F.l1_loss
+    elif config['loss_fn'] == 'huber':
+        delta_val = config.get('huber_delta', 1.0) 
+        loss_fn = lambda a, b: F.huber_loss(a, b, delta=delta_val)
     best_loss = float('inf')
     patience_counter = 0
         
@@ -263,7 +272,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
             with accelerator.accumulate(model):
                 noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros,
                                     return_dict=False)[0]
-                loss = F.mse_loss(noise_pred, noise)
+                loss = loss_fn(noise_pred, noise)
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
@@ -338,7 +347,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
                     
                     # Forward pass
                     noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros, return_dict=False)[0]
-                    v_loss = F.mse_loss(noise_pred, noise)
+                    v_loss = loss_fn(noise_pred, noise)
                     
                     # Gather losses across all GPUs if doing distributed training
                     gathered_v_loss = accelerator.gather(v_loss.unsqueeze(0)).mean().item()
