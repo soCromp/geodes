@@ -226,7 +226,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
                 # Predict the noise residual
                 noise_pred = model(noisy_images, timesteps, encoder_hidden_states=zeros.to(clean_images.device), return_dict=False)[0]
                 loss = loss_fn(noise_pred, noise, reduction="none")
-                loss = loss.view(bs, -1).mean(dim=1) # average over all non-batch dims
+                loss = loss.reshape(bs, -1).mean(dim=1) # average over all non-batch dims
                 
                 # min-snr weighting, if using
                 if config.get('snr_gamma') is not None:
