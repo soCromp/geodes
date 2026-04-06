@@ -306,7 +306,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
             losses.append(logs['loss'])
             global_step += 1
             
-        loss = np.mean(losses)
+        local_loss = np.mean(losses)
         local_loss_tensor = torch.tensor([local_loss], device=accelerator.device)
         global_loss = accelerator.gather(local_loss_tensor).mean().item()
         
