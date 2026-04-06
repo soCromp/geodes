@@ -307,9 +307,12 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
             global_step += 1
             
         loss = np.mean(losses)
+        local_loss_tensor = torch.tensor([local_loss], device=accelerator.device)
+        global_loss = accelerator.gather(local_loss_tensor).mean().item()
+        
         # early stopping stuff
-        if loss < best_loss - config['min_delta']:
-            best_loss = loss
+        if global_loss < best_loss - config['min_delta']:
+            best_loss = global_loss
             patience_counter = 0
         else:
             patience_counter += 1
@@ -317,10 +320,10 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
                 print(f"Epoch {epoch}: No improvement. Patience: {patience_counter}/{config['patience']}")
         
         if accelerator.is_main_process:
-            wandb.log({'epoch_loss': loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
-            progress_bar.set_postfix(**{"loss": loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
+            wandb.log({'epoch_loss': global_loss, 'epoch': epoch, 'patience': patience_counter}, step=global_step)
+            progress_bar.set_postfix(**{"loss": global_loss, "lr": lr_scheduler.get_last_lr()[0], "step": global_step})
             with open(os.path.join(config['checkpoint_dir'], config['name'], 'train_log.txt'), 'a') as f:
-                f.write(f"Epoch {epoch}, Step {global_step}, Loss: {loss}, LR: {logs['lr']}\n")
+                f.write(f"Epoch {epoch}, Step {global_step}, Loss: {global_loss}, LR: {logs['lr']}\n")
             
         if patience_counter >= config['patience']:
             if accelerator.is_main_process:
