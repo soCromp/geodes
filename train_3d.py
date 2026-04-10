@@ -66,7 +66,8 @@ def get_args():
                         help='start sample index for sharded sampling')
     parser.add_argument('--end_idx', type=int, default=None,
                         help='end sample index (exclusive) for sharded sampling')
-    # parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
+    parser.add_argument('--eta', type=float, default=0.0, 
+                        help='Sampling temperature. 0.0 is deterministic, 1.0 is fully stochastic')
     args = parser.parse_args()
     return args
 
@@ -406,7 +407,8 @@ def sample_loop(config, model, noise_scheduler, dataloader):
             torch.as_tensor(prompt, dtype=config['dtype'], device='cuda'),
             num_frames=config['frames'],
             generator=generator, 
-            encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda')
+            encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda'),
+            eta=config['eta'],
         )['images']
         
         # # output from model is on [-1,1] log scale
@@ -429,9 +431,9 @@ if config['train']:
     print('noise scheduler config:\n', noise_scheduler.config)
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, val_dataloader, lr_scheduler)
 else:
-    print(unet)
+    # print(unet)
     # redefine to deterministic for sampling: (avoid frame 2 noise)
     sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
-    sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps)
+    sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps) 
     sample_loop(config, unet, sample_noise_scheduler, dataloader)
     
