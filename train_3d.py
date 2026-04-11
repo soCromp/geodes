@@ -68,8 +68,8 @@ def get_args():
                         help='end sample index (exclusive) for sharded sampling')
     parser.add_argument('--eta', type=float, default=0.0, 
                         help='Sampling temperature. 0.0 is deterministic, 1.0 is fully stochastic')
-    parser.add_argument('--clip_sample', action="store_true", 
-                        help='if true, clip noisy sample to [-1,1] at each step during sampling.')
+    parser.add_argument('--no_sample_clip', action="store_false", default=True, dest='clip_sample',
+                        help='if passed, disables clipping noisy sample to [-1,1] at each step during sampling')
     args = parser.parse_args()
     return args
 
