@@ -1,5 +1,7 @@
 # Initially taken from GitHub's Python gitignore file
 
+wandb.key
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
