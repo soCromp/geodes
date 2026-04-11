@@ -19,23 +19,28 @@ if variable == 'windmag':
     channel_names = ['windmag']
 elif variable == 'multivar':
     channel_names = ['slp', 'u', 'v', 't', 'q']
-method = 'unknown_method'
-if 'geodes' in synth_path:
-    method = 'geodes'
-elif 'svd' in synth_path:
-    method = 'svd'
-elif 'climax' in synth_path:
-    method = 'ClimaX'
-elif 'aurora' in synth_path:
-    method = 'aurora'
-elif 'clima' in synth_path:
-    method = 'climatology'
-elif 'codicast' in synth_path:
-    method = 'CoDiCast'
-elif 'cont' in synth_path:
-    method = 'CEF'
-elif 'test' in synth_path:
-    method = 'Test'
+    
+
+if len(sys.argv) > 3:
+    method = sys.argv[3]
+else:
+    method = 'unknown_method'
+    if 'geodes' in synth_path:
+        method = 'geodes'
+    elif 'svd' in synth_path:
+        method = 'svd'
+    elif 'climax' in synth_path:
+        method = 'ClimaX'
+    elif 'aurora' in synth_path:
+        method = 'aurora'
+    elif 'clima' in synth_path:
+        method = 'climatology'
+    elif 'codicast' in synth_path:
+        method = 'CoDiCast'
+    elif 'cont' in synth_path:
+        method = 'CEF'
+    elif 'test' in synth_path:
+        method = 'Test'
     
 print(f'***Detected {method} method, variable(s) {variable} and {split} split***')
 
@@ -312,14 +317,14 @@ print('train max:', train['data'].max(axis=(0,1,2,3)))
 print('synth max:', synth['data'].max(axis=(0,1,2,3)))
 
 ####### Noise baseline for FVD and KVD
-print('computing FVD, KVD for equal splits of train (noise baseline)')
-split1 = random.sample(range(len(train['data'])), len(train['data'])//2)
-split2 = [i for i in range(len(train['data'])) if i not in split1]
-train1 = train['data'][split1]
-train2 = train['data'][split2]
-fvdb, encoderb = get_fvd(train1, train2)
-kvdb = get_kvd(train1, train2, encoder=encoderb)
-print('fvd', fvdb, 'kvd', kvdb)
+# print('computing FVD, KVD for equal splits of train (noise baseline)')
+# split1 = random.sample(range(len(train['data'])), len(train['data'])//2)
+# split2 = [i for i in range(len(train['data'])) if i not in split1]
+# train1 = train['data'][split1]
+# train2 = train['data'][split2]
+# fvdb, encoderb = get_fvd(train1, train2)
+# kvdb = get_kvd(train1, train2, encoder=encoderb)
+# print('fvd', fvdb, 'kvd', kvdb)
 
 ####### FVD / KVD
 print('computing FVD, KVD for train vs synth')
