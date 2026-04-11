@@ -68,6 +68,8 @@ def get_args():
                         help='end sample index (exclusive) for sharded sampling')
     parser.add_argument('--eta', type=float, default=0.0, 
                         help='Sampling temperature. 0.0 is deterministic, 1.0 is fully stochastic')
+    parser.add_argument('--clip_sample', action="store_true", 
+                        help='if true, clip noisy sample to [-1,1] at each step during sampling.')
     args = parser.parse_args()
     return args
 
@@ -432,8 +434,10 @@ if config['train']:
     train_loop(config, unet, noise_scheduler, optimizer, dataloader, val_dataloader, lr_scheduler)
 else:
     # print(unet)
-    # redefine to deterministic for sampling: (avoid frame 2 noise)
-    sample_noise_scheduler = DDIMScheduler.from_config(noise_scheduler.config) 
+    # redefine to DDIM for sampling: (avoid frame 2 noise)
+    sample_noise_scheduler = DDIMScheduler.from_config(
+                                noise_scheduler.config,
+                                clip_sample=config['clip_sample']) 
     sample_noise_scheduler.set_timesteps(noise_scheduler.config.num_train_timesteps) 
     sample_loop(config, unet, sample_noise_scheduler, dataloader)
     
