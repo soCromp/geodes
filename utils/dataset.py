@@ -187,8 +187,12 @@ class ImageDataset(Dataset):
             self.data = np.transpose(self.data, (0, 3, 1, 2)) # result is B C H W
         assert self.data.shape[2] == self.height and self.data.shape[3] == self.width
         
-        with open(os.path.join(self.base_folder, '../channels.txt'), 'r') as f:
-            self.channel_names = [line.strip() for line in f.readlines()]
+        try:
+            with open(os.path.join(self.base_folder, '../channels.txt'), 'r') as f:
+                self.channel_names = [line.strip() for line in f.readlines()]
+        except:
+            with open(os.path.join(self.base_folder, '../../channels.txt'), 'r') as f:
+                self.channel_names = [line.strip() for line in f.readlines()]
             
         self.flip = flip 
         if self.flip:
@@ -259,8 +263,12 @@ class VideoDataset(Dataset):
             self.data = np.transpose(self.data, (0, 4, 1, 2, 3)) # B C T H W
         assert self.data.shape[3] == self.height and self.data.shape[4] == self.width
         
-        with open(os.path.join(self.base_folder, '../channels.txt'), 'r') as f:
-            self.channel_names = [line.strip() for line in f.readlines()]
+        try:
+            with open(os.path.join(self.base_folder, '../channels.txt'), 'r') as f:
+                self.channel_names = [line.strip() for line in f.readlines()]
+        except:
+            with open(os.path.join(self.base_folder, '../../channels.txt'), 'r') as f:
+                self.channel_names = [line.strip() for line in f.readlines()]
             
         self.flip = flip 
         if self.flip:

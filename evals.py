@@ -37,7 +37,7 @@ else:
         method = 'climatology'
     elif 'codicast' in synth_path:
         method = 'CoDiCast'
-    elif 'cont' in synth_path:
+    elif 'cef' in synth_path:
         method = 'CEF'
     elif 'test' in synth_path:
         method = 'Test'
