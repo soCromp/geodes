@@ -12,7 +12,7 @@ class HybridNormalizer:
         self.stats = {} 
 
 
-    def fit(self, data):
+    def fit(self, data, clamp=True):
         """
         Compute per-channel 1st and 99th percentiles.
         """
@@ -33,23 +33,27 @@ class HybridNormalizer:
             arr = np.concatenate(pixels[char])
             
             # --- LOGIC SWITCH ---
-            if char in ['q', 'humidity', 'precip', 'windmag', 'wind-mag']:
+            if char.lower() in ['q', 'humidity', 'precip', 'windmag', 'wind-mag']:
                 # Log Transform Logic
                 arr = np.log1p(arr)
-                self.stats[char] = {
-                    'min': np.percentile(arr, 1), # 1st percentile in log space
-                    'max': np.percentile(arr, 99),
-                    'median': np.median(arr), # compute median to fill nans with
-                    'method': 'log_robust'
-                }
+                method = 'log_robust'
+            else: # Linear Logic (U, V, T, SLP)
+                method = 'linear_robust'
+                
+            if clamp:
+                min_char = np.percentile(arr, 1) # 1st percentile (in log space, if applied)
+                max_char = np.percentile(arr, 99)
             else:
-                # Linear Logic (U, V, T, SLP)
-                self.stats[char] = {
-                    'min': np.percentile(arr, 1),
-                    'max': np.percentile(arr, 99),
-                    'median': np.median(arr), # compute median to fill nans with
-                    'method': 'linear_robust'
-                }
+                min_char = np.min(arr)
+                max_char = np.max(arr)
+            
+            
+            self.stats[char] = {
+                'min': min_char,
+                'max': max_char,
+                'median': np.median(arr), # compute median to fill nans with
+                'method': method
+            }
             
             print(f"Var {char} ({self.stats[char]['method']}): "
                   f"Min={self.stats[char]['min']:.3f}, Max={self.stats[char]['max']:.3f},",
@@ -144,7 +148,7 @@ class HybridNormalizer:
                     val = torch.expm1(val)
                 else:
                     val = np.expm1(val)
-                # Physics check: Humidity cannot be negative
+                # Physics check-humidity cannot be negative
                 if isinstance(val, torch.Tensor):
                     val = torch.clamp(val, min=0.0)
                 else:
@@ -161,7 +165,7 @@ class HybridNormalizer:
     
 
 class ImageDataset(Dataset):
-    def __init__(self, dataset, width=32, height=32, sample_frames=8, flip=False):
+    def __init__(self, dataset, width=32, height=32, sample_frames=8, flip=False, clamp=True):
         """
         Args:
             num_samples (int): Number of samples in the dataset.
@@ -170,6 +174,7 @@ class ImageDataset(Dataset):
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
+        self.clamp = clamp
         
         # Define the path to the folder containing video frames
         self.base_folder = dataset
@@ -208,7 +213,7 @@ class ImageDataset(Dataset):
             
         self.channels = len(self.channel_names) # convenience variable
         self.normalizer = HybridNormalizer(self.channel_names)
-        self.normalizer.fit(self.data)
+        self.normalizer.fit(self.data, clamp=self.clamp)
         self.data = self.normalizer.normalize(self.data)
  
 
@@ -235,7 +240,7 @@ class ImageDataset(Dataset):
 class VideoDataset(Dataset):
     def __init__(self, dataset, 
                  width=32, height=32, sample_frames=8,
-                 start_idx=0, end_idx=None, flip=False):
+                 start_idx=0, end_idx=None, flip=False, clamp=True):
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
@@ -284,7 +289,7 @@ class VideoDataset(Dataset):
             
         self.channels = len(self.channel_names) # convenience variable
         self.normalizer = HybridNormalizer(self.channel_names)
-        self.normalizer.fit(self.data)
+        self.normalizer.fit(self.data, clamp=self.clamp)
         self.data = self.normalizer.normalize(self.data)
                 
 

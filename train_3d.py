@@ -52,6 +52,8 @@ def get_args():
                         help='if true, flip N/S the val data (useful if validating on different hemisphere than training)')
     parser.add_argument('--channels', type=int, default=1)
     parser.add_argument('--frames', type=int, default=8)
+    parser.add_argument('--no_stat_clamp', action="store_false", default=True, dest='clamp_stats',
+                        help='if passed, disables clamping to 1st/99th percentiles for data normalization stats')
     parser.add_argument('--continue', action='store_true', 
                         help='if true and training true, attempt to resume training. uses training configs specified here')
     parser.add_argument('--img_model', type=str, 
@@ -85,19 +87,23 @@ except:
     wandb.login()
 
 
-dataset = VideoDataset(dataset=config['dataset'], sample_frames=config['frames'],
-                       width=config['image_size'], height=config['image_size'],
-                       start_idx=config['start_idx'], end_idx=config['end_idx'])
 if args.train:
+    dataset = VideoDataset(dataset=config['dataset'], sample_frames=config['frames'],
+                       width=config['image_size'], height=config['image_size'],
+                       clamp=config['clamp_stats'])
     dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True,) # otherwise crashes on last batch
 else:
+    dataset = VideoDataset(dataset=config['dataset'], sample_frames=config['frames'],
+                       width=config['image_size'], height=config['image_size'],
+                       start_idx=config['start_idx'], end_idx=config['end_idx'],
+                       clamp=config['clamp_stats'])
     dataloader = DataLoader(dataset, batch_size=config['eval_batch_size'], shuffle=False,) 
     
 val_dataloader = None
 if config['val_dataset'] is not None and config['train']:
     val_dataset = VideoDataset(dataset=config['val_dataset'], sample_frames=config['frames'],
                                 width=config['image_size'], height=config['image_size'],
-                                flip=config['val_flip'])
+                                flip=config['val_flip'], clamp=config['clamp_stats'])
     val_dataloader = DataLoader(val_dataset, batch_size=config['eval_batch_size'], shuffle=True, drop_last=True) 
 
 def image_to_video_model(config, time_avg=True):

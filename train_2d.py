@@ -52,6 +52,8 @@ def get_args():
                         help='path to validation data (training only -- does nothing for sampling runs)')
     parser.add_argument('--val_flip', action='store_true', default=True,
                         help='if true, flip N/S the val data (useful if validating on different hemisphere than training)')
+    parser.add_argument('--no_stat_clamp', action="store_false", default=True, dest='clamp_stats',
+                        help='if passed, disables clamping to 1st/99th percentiles for data normalization stats')
     parser.add_argument('--continue', type=bool, default=False, 
                         help='if true and training true, attempt to resume training. uses training configs specified here')
     parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
@@ -81,12 +83,12 @@ except:
 output_dir = os.path.join(args.checkpoint_dir, args.name)
 
     
-dataset = ImageDataset(dataset=config['dataset'])
+dataset = ImageDataset(dataset=config['dataset'], clamp=config['clamp_stats'])
 dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True)
 
 val_dataloader = None
 if config['val_dataset'] is not None:
-    val_dataset = ImageDataset(dataset=config['val_dataset'], flip=config['val_flip'])
+    val_dataset = ImageDataset(dataset=config['val_dataset'], flip=config['val_flip'], clamp=config['clamp_stats'])
     val_dataloader = DataLoader(val_dataset, batch_size=config['eval_batch_size'], shuffle=True, drop_last=True)
 
 
@@ -146,29 +148,6 @@ class CondDiffusionPipeline(DiffusionPipeline):
             sample = self.scheduler.step(eps, t, sample).prev_sample
             
         return {"images": sample.cpu()}
-        
-
-# def evaluate(config, epoch, pipeline):
-#     # Sample some images from random noise (this is the backward diffusion process).
-#     images = pipeline(
-#         batch_size=config['eval_batch_size'],
-#         generator=torch.Generator(device='cuda').manual_seed(config['seed']), 
-#         encoder_hidden_states=zeros.to('cuda'),
-#         # Use a separate torch generator to avoid rewinding the random state of the main training loop
-#     )['images']
-    
-#     test_dir = os.path.join(output_dir, "train_samples", str(epoch))
-#     os.makedirs(test_dir, exist_ok=True)
-    
-#     for i in range(config['eval_batch_size']):
-#         # output from model is *tensor* [channels, height, width]
-#         # on [-1,1]  scale; we will convert to [0,255] for visualization
-#         channel_frames = [np.asarray(images[i][c]) for c in range(dataset.channels)]
-#         channel_frames = [Image.fromarray(255/2*(frame+1)) for frame in channel_frames]
-
-#         # Make a grid out of the images
-#         image_grid = make_image_grid(channel_frames, rows=1, cols=len(channel_frames))
-#         image_grid.save(f"{test_dir}/{i}.png")
 
 
 def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_dataloader, lr_scheduler):
