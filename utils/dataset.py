@@ -244,6 +244,7 @@ class VideoDataset(Dataset):
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
+        self.clamp =clamp
         
         # Define the path to the folder containing video frames
         self.base_folder = dataset
