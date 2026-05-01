@@ -138,10 +138,28 @@ def image_to_video_model(config, time_avg=True):
     unet2d = None
     return unet3d
 
-if not config.get('continue', False) and config['train']: 
+if not config.get('continue', False) and config['train'] and config['img_model'] is not None: 
     unet = image_to_video_model(config)
     noise_scheduler = diffusers.DDPMScheduler.from_pretrained(
         os.path.join(config['checkpoint_dir'], config['img_model']), subfolder='scheduler', revision='main')
+    start_epoch = 0
+elif not config.get('continue', False) and config['train']:
+    unet = UNet3DConditionModel(
+        sample_size=config['image_size'],
+        in_channels=config['channels'],
+        out_channels=config['channels'],
+        block_out_channels=[32, 64, 128],
+        layers_per_block=2,
+        attention_head_dim=8, # defaults to 8 in 2D model
+        down_block_types   = ("CrossAttnDownBlock3D",
+                            "CrossAttnDownBlock3D",
+                            "DownBlock3D"),
+        up_block_types     = ("UpBlock3D",
+                            "CrossAttnUpBlock3D",
+                            "CrossAttnUpBlock3D"),
+        cross_attention_dim=768,
+    ) 
+    noise_scheduler = diffusers.DDPMScheduler(num_train_timesteps=1000, clip_sample=False) 
     start_epoch = 0
 else: # sample or resume training
     unet = diffusers.UNet3DConditionModel.from_pretrained(

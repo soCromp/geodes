@@ -3,7 +3,7 @@ import tarfile
 import shutil
 
 work_dir = '/mnt/data/sonia/geodes-samples/multivar/date'
-out_name = '3d_l1.h25_6008482_sample_noclip_natlantic_test_606'
+out_name = '3d_h25.2d_h1_6008421_sample_natlantic_test'
 in_names = sorted([f for f in os.listdir(work_dir) if f.startswith(out_name) and f.endswith('.tar.gz')])
 print('Found', len(in_names), 'files:\n', in_names)
 # in_names = [f'3d_l1.h25_6008482_sample_eta1.0_natlantic_test_6045368_{i}.tar.gz' for i in range(15)]
