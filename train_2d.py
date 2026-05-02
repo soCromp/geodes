@@ -50,7 +50,7 @@ def get_args():
     parser.add_argument('--dataset', '-d', type=str, required=True, help='path to training data, or prompt data for sampling')
     parser.add_argument('--val_dataset', '-v', type=str, required=False, default=None,
                         help='path to validation data (training only -- does nothing for sampling runs)')
-    parser.add_argument('--val_flip', action='store_true', default=True,
+    parser.add_argument('--val_flip', action=argparse.BooleanOptionalAction, default=True,
                         help='if true, flip N/S the val data (useful if validating on different hemisphere than training)')
     parser.add_argument('--no_stat_clamp', action="store_false", default=True, dest='clamp_stats',
                         help='if passed, disables clamping to 1st/99th percentiles for data normalization stats')
