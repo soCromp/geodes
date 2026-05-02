@@ -54,6 +54,8 @@ def get_args():
                         help='if true, flip N/S the val data (useful if validating on different hemisphere than training)')
     parser.add_argument('--no_stat_clamp', action="store_false", default=True, dest='clamp_stats',
                         help='if passed, disables clamping to 1st/99th percentiles for data normalization stats')
+    parser.add_argument('--normalize_all_linear', action='store_true', default=False, 
+                        help='if passed, disables log transform for any channels and does only linear instead')
     parser.add_argument('--continue', type=bool, default=False, 
                         help='if true and training true, attempt to resume training. uses training configs specified here')
     parser.add_argument('--sample', type=int, default=0, help='0 for no sampling, else the number of samples to generate')
@@ -83,12 +85,13 @@ except:
 output_dir = os.path.join(args.checkpoint_dir, args.name)
 
     
-dataset = ImageDataset(dataset=config['dataset'], clamp=config['clamp_stats'])
+dataset = ImageDataset(dataset=config['dataset'], clamp=config['clamp_stats'], all_linear=config['normalize_all_linear'])
 dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True)
 
 val_dataloader = None
 if config['val_dataset'] is not None:
-    val_dataset = ImageDataset(dataset=config['val_dataset'], flip=config['val_flip'], clamp=config['clamp_stats'])
+    val_dataset = ImageDataset(dataset=config['val_dataset'], flip=config['val_flip'], 
+                               clamp=config['clamp_stats'], all_linear=config['normalize_all_linear'])
     val_dataloader = DataLoader(val_dataset, batch_size=config['eval_batch_size'], shuffle=True, drop_last=True)
 
 
