@@ -12,7 +12,7 @@ class HybridNormalizer:
         self.stats = {} 
 
 
-    def fit(self, data, clamp=True):
+    def fit(self, data, clamp=True, all_linear=False):
         """
         Compute per-channel 1st and 99th percentiles.
         """
@@ -33,7 +33,7 @@ class HybridNormalizer:
             arr = np.concatenate(pixels[char])
             
             # --- LOGIC SWITCH ---
-            if char.lower() in ['q', 'humidity', 'precip', 'windmag', 'wind-mag']:
+            if not all_linear and char.lower() in ['q', 'humidity', 'precip', 'windmag', 'wind-mag']:
                 # Log Transform Logic
                 arr = np.log1p(arr)
                 method = 'log_robust'
@@ -165,7 +165,7 @@ class HybridNormalizer:
     
 
 class ImageDataset(Dataset):
-    def __init__(self, dataset, width=32, height=32, sample_frames=8, flip=False, clamp=True):
+    def __init__(self, dataset, width=32, height=32, sample_frames=8, flip=False, clamp=True, all_linear=False):
         """
         Args:
             num_samples (int): Number of samples in the dataset.
@@ -213,7 +213,7 @@ class ImageDataset(Dataset):
             
         self.channels = len(self.channel_names) # convenience variable
         self.normalizer = HybridNormalizer(self.channel_names)
-        self.normalizer.fit(self.data, clamp=self.clamp)
+        self.normalizer.fit(self.data, clamp=self.clamp, all_linear=all_linear)
         self.data = self.normalizer.normalize(self.data)
  
 
@@ -240,7 +240,8 @@ class ImageDataset(Dataset):
 class VideoDataset(Dataset):
     def __init__(self, dataset, 
                  width=32, height=32, sample_frames=8,
-                 start_idx=0, end_idx=None, flip=False, clamp=True):
+                 start_idx=0, end_idx=None, flip=False, 
+                 clamp=True, all_linear=False):
         self.width = width
         self.height = height
         self.sample_frames = sample_frames
@@ -290,7 +291,7 @@ class VideoDataset(Dataset):
             
         self.channels = len(self.channel_names) # convenience variable
         self.normalizer = HybridNormalizer(self.channel_names)
-        self.normalizer.fit(self.data, clamp=self.clamp)
+        self.normalizer.fit(self.data, clamp=self.clamp, all_linear=all_linear)
         self.data = self.normalizer.normalize(self.data)
                 
 
