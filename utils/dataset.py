@@ -181,15 +181,25 @@ class ImageDataset(Dataset):
         folders = [f for f in os.listdir(self.base_folder) if os.path.isdir(os.path.join(self.base_folder, f))]
         
         data = [] 
-        for folder in folders:
-            for i in range(self.sample_frames):
-                frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
-                data.append(frame)
-        self.data = np.stack(data, axis=0)
-        if self.data.ndim == 3:
-            self.data = np.expand_dims(self.data, axis=1) # add channel dim if missing
+        if len(folders) == 0: # extension dataset
+            folders = [f for f in os.listdir(self.base_folder) if f.endswith('.pt')]
+            for folder in folders:
+                data_pt = torch.load(os.path.join(self.base_folder, folder)) # T C H W
+                data.append(data_pt.numpy())
+            self.data = np.concatenate(data, axis=0) # B C H W
+            print(self.data.shape)
         else:
-            self.data = np.transpose(self.data, (0, 3, 1, 2)) # result is B C H W
+            for folder in folders:
+                for i in range(self.sample_frames):
+                    frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy'))
+                    data.append(frame)
+            self.data = np.stack(data, axis=0)
+        
+            if self.data.ndim == 3:
+                self.data = np.expand_dims(self.data, axis=1) # add channel dim if missing
+            else:
+                self.data = np.transpose(self.data, (0, 3, 1, 2)) # result is B C H W
+                
         assert self.data.shape[2] == self.height and self.data.shape[3] == self.width
         
         try:
@@ -251,23 +261,36 @@ class VideoDataset(Dataset):
         self.base_folder = dataset
         self.folders = [f for f in os.listdir(self.base_folder) if \
             os.path.isdir(os.path.join(self.base_folder, f))]#[:10]
-        self.folders = sorted(self.folders)
-        if end_idx is None:
-            end_idx = len(self.folders)
-        self.folders = self.folders[start_idx:end_idx]
         
         data = [] # want B C T H W
-        for folder in self.folders:
-            frames = []
-            for i in range(self.sample_frames):
-                frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy')) # H W (C)
-                frames.append(frame)
-            data.append(np.stack(frames, axis=0)) # T H W (C)
-        self.data = np.stack(data, axis=0) # B T H W (C)
-        if self.data.ndim == 4: # add channel dim if missing
-            self.data = np.expand_dims(self.data, axis=1) # now B C T H W
+        if len(self.folders) == 0: # extension dataset
+            self.folders = sorted([f for f in os.listdir(self.base_folder) if f.endswith('.pt')])
+            if end_idx is None:
+                end_idx = len(self.folders)
+            self.folders = self.folders[start_idx:end_idx]
+            
+            for folder in self.folders:
+                frames = torch.load(os.path.join(self.base_folder, folder)).numpy() # T C H W
+                data.append(frames)
+            self.data = np.stack(data, axis=0) # B T C H W
+            self.data = np.transpose(self.data, (0, 2, 1, 3, 4)) # B C T H W
         else:
-            self.data = np.transpose(self.data, (0, 4, 1, 2, 3)) # B C T H W
+            self.folders = sorted(self.folders)
+            if end_idx is None:
+                end_idx = len(self.folders)
+            self.folders = self.folders[start_idx:end_idx]
+            
+            for folder in self.folders:
+                frames = []
+                for i in range(self.sample_frames):
+                    frame = np.load(os.path.join(self.base_folder, folder, f'{i}.npy')) # H W (C)
+                    frames.append(frame)
+                data.append(np.stack(frames, axis=0)) # T H W (C)
+            self.data = np.stack(data, axis=0) # B T H W (C)
+            if self.data.ndim == 4: # add channel dim if missing
+                self.data = np.expand_dims(self.data, axis=1) # now B C T H W
+            else:
+                self.data = np.transpose(self.data, (0, 4, 1, 2, 3)) # B C T H W
         assert self.data.shape[3] == self.height and self.data.shape[4] == self.width
         
         try:

@@ -151,7 +151,7 @@ elif not config.get('continue', False) and config['train']:
         sample_size=config['image_size'],
         in_channels=config['channels'],
         out_channels=config['channels'],
-        block_out_channels=[32, 64, 128],
+        block_out_channels=[512,1024,2048],
         layers_per_block=2,
         attention_head_dim=8, # defaults to 8 in 2D model
         down_block_types   = ("CrossAttnDownBlock3D",

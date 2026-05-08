@@ -85,13 +85,15 @@ except:
 output_dir = os.path.join(args.checkpoint_dir, args.name)
 
     
-dataset = ImageDataset(dataset=config['dataset'], clamp=config['clamp_stats'], all_linear=config['normalize_all_linear'])
+dataset = ImageDataset(dataset=config['dataset'], clamp=config['clamp_stats'], all_linear=config['normalize_all_linear'],
+                       height=config['image_size'], width=config['image_size'])
 dataloader = DataLoader(dataset, batch_size=config['train_batch_size'], shuffle=True, drop_last=True)
 
 val_dataloader = None
 if config['val_dataset'] is not None:
     val_dataset = ImageDataset(dataset=config['val_dataset'], flip=config['val_flip'], 
-                               clamp=config['clamp_stats'], all_linear=config['normalize_all_linear'])
+                               clamp=config['clamp_stats'], all_linear=config['normalize_all_linear'],
+                               height=config['image_size'], width=config['image_size'])
     val_dataloader = DataLoader(val_dataset, batch_size=config['eval_batch_size'], shuffle=True, drop_last=True)
 
 
