@@ -47,7 +47,8 @@ print(f'***Detected {method} method, variable(s) {variable} and {split} split***
 def load_data(path):
     data = []
     names = []
-    for d in sorted(os.listdir(path)):
+    for d in sorted(os.listdir(path), reverse=False):
+        if d.startswith('2015'): continue
         if os.path.isdir(os.path.join(path, d)):
             # assert len(os.listdir(os.path.join(path, d))) == len_datapoint, f"Data point {d} in {path} does not have {len_datapoint} frames"
             names.append(d)
@@ -56,6 +57,12 @@ def load_data(path):
                 point.append(np.load(os.path.join(path, d, f'{i}.npy')).squeeze())
             data.append(np.stack(point, axis=0))
     return {'names': names, 'data': np.stack(data, axis = 0)}
+
+
+def get_mslp_err(train, synth):
+    true_mslp = np.min(train[..., 0], axis=(2,3))
+    pred_mslp = np.min(synth[..., 0], axis=(2,3))
+    return np.abs(true_mslp[:,-1] - pred_mslp[:,-1]).mean()
 
 
 def get_fvd(train, synth, encoder=None):
@@ -88,6 +95,45 @@ def get_rmse(train, synth, batch_size=64):
     for batch_synth, batch_train in zip(np.array_split(synth, n_splits), np.array_split(train, n_splits)):
         accumulator.update(batch_synth, batch_train)
     return accumulator.results()
+
+
+def get_acc(train, synth):
+    """
+    Calculates the spatial Pattern Correlation (ACC) between predicted and true grids.
+    Returns: Array of shape (Timesteps, Channels) representing mean ACC.
+    """
+    if train.ndim == 4:
+        train = np.expand_dims(train, -1)
+        synth = np.expand_dims(synth, -1)
+        
+    # Skip the prompt frame
+    t_true = train[:, 1:, ...]
+    t_pred = synth[:, 1:, ...]
+
+    # 1. Calculate spatial means across H and W (axes 2 and 3)
+    true_mean = np.mean(t_true, axis=(2, 3), keepdims=True)
+    pred_mean = np.mean(t_pred, axis=(2, 3), keepdims=True)
+
+    # 2. Calculate spatial anomalies
+    true_anom = t_true - true_mean
+    pred_anom = t_pred - pred_mean
+
+    # 3. Calculate Covariance (Numerator)
+    numerator = np.sum(true_anom * pred_anom, axis=(2, 3))
+
+    # 4. Calculate Variances (Denominator)
+    true_var = np.sum(true_anom**2, axis=(2, 3))
+    pred_var = np.sum(pred_anom**2, axis=(2, 3))
+    denominator = np.sqrt(true_var * pred_var)
+
+    # 5. Calculate ACC (add epsilon to prevent division by zero)
+    acc = numerator / (denominator + 1e-8)
+
+    # 6. Average across all storms in the batch
+    # Resulting shape: (Timesteps, Channels)
+    mean_acc = np.mean(acc, axis=0) 
+    
+    return mean_acc
 
 
 def mins_maxes(train, synth): # good as a sanity check
@@ -326,6 +372,9 @@ print('synth max:', synth['data'].max(axis=(0,1,2,3)))
 # kvdb = get_kvd(train1, train2, encoder=encoderb)
 # print('fvd', fvdb, 'kvd', kvdb)
 
+
+
+
 ####### FVD / KVD
 print('computing FVD, KVD for train vs synth')
 fvd, encoder = get_fvd(train['data'], synth['data'])
@@ -340,6 +389,25 @@ for name in synth['names']:
 train_match = {'names': synth['names'], 'data': np.stack(train_match_data, axis=0)}
 rmse = get_rmse(train_match['data'], synth['data'])
 print('rmse', rmse)
+
+
+####### MSLP error 
+print('computing MSLP error')
+mslp_err = get_mslp_err(train_match['data'], synth['data'])
+print('mslp error', mslp_err)
+
+
+####### ACC (Anomaly Correlation Coefficient)
+print('computing Spatial ACC')
+acc_results = get_acc(train_match['data'], synth['data'])
+
+# Print the final timestep ACC for each variable
+print(f"Final Frame (T={acc_results.shape[0]}) ACC Breakdown:")
+if variable == 'multivar':
+    for v_idx, v_name in enumerate(channel_names):
+        print(f"  {v_name.upper()} ACC: {acc_results[-1, v_idx]:.4f}")
+else:
+    print(f"  {variable.upper()} ACC: {acc_results[-1, 0]:.4f}")
 
 
 if variable == 'multivar':
