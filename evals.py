@@ -4,6 +4,7 @@ import sys
 from utils.video_metrics import compute_fvd, compute_kvd
 from utils.forecast_metrics import RmseAccumulator, PsdAccumulator
 import random
+from scipy.ndimage import gaussian_filter
 
 from matplotlib import pyplot as plt
 plt.rcParams.update({'font.size': 12})
@@ -59,6 +60,140 @@ def load_data(path):
     return {'names': names, 'data': np.stack(data, axis = 0)}
 
 
+def get_ike_err(train, synth, threshold=17.0):
+    """
+    Measures error in total kinetic energy of tropical storm-force winds at T=final.
+    """
+    # Extract final timestep U and V components
+    train_u, train_v = train[:, -1, :, :, 1], train[:, -1, :, :, 2]
+    synth_u, synth_v = synth[:, -1, :, :, 1], synth[:, -1, :, :, 2]
+
+    # Calculate wind magnitude
+    train_wind = np.sqrt(train_u**2 + train_v**2)
+    synth_wind = np.sqrt(synth_u**2 + synth_v**2)
+
+    # Calculate Kinetic Energy (V^2) only where winds exceed the threshold
+    train_ike = np.sum(np.where(train_wind > threshold, train_wind**2, 0), axis=(1, 2))
+    synth_ike = np.sum(np.where(synth_wind > threshold, synth_wind**2, 0), axis=(1, 2))
+
+    # Return Mean Absolute Error
+    return np.abs(train_ike - synth_ike).mean()
+
+
+def get_tiered_ike_err(train, synth):
+    """
+    Measures error in total kinetic energy across two critical thresholds:
+    10 m/s (Captures broad extratropical circulation)
+    17 m/s (Captures tropical storm-force / gale destructive cores)
+    """
+    # Extract final timestep U and V components
+    train_u, train_v = train[:, -1, :, :, 1], train[:, -1, :, :, 2]
+    synth_u, synth_v = synth[:, -1, :, :, 1], synth[:, -1, :, :, 2]
+
+    # Calculate wind magnitude
+    train_wind = np.sqrt(train_u**2 + train_v**2)
+    synth_wind = np.sqrt(synth_u**2 + synth_v**2)
+
+    # --- Threshold 1: Broad Circulation (> 10 m/s) ---
+    train_ike_10 = np.sum(np.where(train_wind > 10.0, train_wind**2, 0), axis=(1, 2))
+    synth_ike_10 = np.sum(np.where(synth_wind > 10.0, synth_wind**2, 0), axis=(1, 2))
+    err_10 = np.abs(train_ike_10 - synth_ike_10).mean()
+
+    # --- Threshold 2: Destructive Core (> 17 m/s) ---
+    train_ike_17 = np.sum(np.where(train_wind > 17.0, train_wind**2, 0), axis=(1, 2))
+    synth_ike_17 = np.sum(np.where(synth_wind > 17.0, synth_wind**2, 0), axis=(1, 2))
+    err_17 = np.abs(train_ike_17 - synth_ike_17).mean()
+
+    return err_10, err_17
+
+
+def get_vorticity_err(train, synth):
+    """
+    Calculates Maximum Relative Vorticity error using spatial gradients at T=final.
+    ζ = dV/dx - dU/dy
+    """
+    train_u, train_v = train[:, -1, :, :, 1], train[:, -1, :, :, 2]
+    synth_u, synth_v = synth[:, -1, :, :, 1], synth[:, -1, :, :, 2]
+
+    # np.gradient returns gradients along axis=1 (Height/Y) and axis=2 (Width/X)
+    train_dv_dy, train_dv_dx = np.gradient(train_v, axis=(1, 2))
+    train_du_dy, train_du_dx = np.gradient(train_u, axis=(1, 2))
+    
+    synth_dv_dy, synth_dv_dx = np.gradient(synth_v, axis=(1, 2))
+    synth_du_dy, synth_du_dx = np.gradient(synth_u, axis=(1, 2))
+
+    # Calculate relative vorticity
+    train_vort = train_dv_dx - train_du_dy
+    synth_vort = synth_dv_dx - synth_du_dy
+
+    # Find the maximum rotational intensity per storm
+    train_max_vort = np.max(train_vort, axis=(1, 2))
+    synth_max_vort = np.max(synth_vort, axis=(1, 2))
+
+    return np.abs(train_max_vort - synth_max_vort).mean()
+
+
+def get_rmw_err(train, synth):
+    """
+    Calculates the spatial distance between the pressure minimum (eye) 
+    and the wind speed maximum (eyewall) at T=final.
+    """
+    # Channel 0 is SLP
+    train_slp, synth_slp = train[:, -1, :, :, 0], synth[:, -1, :, :, 0]
+    
+    # Calculate wind magnitudes
+    train_wind = np.sqrt(train[:, -1, :, :, 1]**2 + train[:, -1, :, :, 2]**2)
+    synth_wind = np.sqrt(synth[:, -1, :, :, 1]**2 + synth[:, -1, :, :, 2]**2)
+
+    B, H, W = train_slp.shape
+    train_rmw_list, synth_rmw_list = [], []
+
+    for b in range(B):
+        # Locate the eye (Minimum SLP coordinates)
+        t_eye_y, t_eye_x = np.unravel_index(np.argmin(train_slp[b]), (H, W))
+        s_eye_y, s_eye_x = np.unravel_index(np.argmin(synth_slp[b]), (H, W))
+
+        # Locate the eyewall peak (Maximum Wind coordinates)
+        t_mw_y, t_mw_x = np.unravel_index(np.argmax(train_wind[b]), (H, W))
+        s_mw_y, s_mw_x = np.unravel_index(np.argmax(synth_wind[b]), (H, W))
+
+        # Calculate Euclidean distance (in grid cells)
+        train_rmw_list.append(np.sqrt((t_eye_y - t_mw_y)**2 + (t_eye_x - t_mw_x)**2))
+        synth_rmw_list.append(np.sqrt((s_eye_y - s_mw_y)**2 + (s_eye_x - s_mw_x)**2))
+
+    return np.abs(np.array(train_rmw_list) - np.array(synth_rmw_list)).mean()
+
+
+def get_hf_spectral_ratio(train, synth, batch_size=64):
+    """
+    Integrates the high-frequency half of the Power Spectral Density 
+    to output a single 'Sharpness Ratio' for the wind fields.
+    """
+    train_var, synth_var = train[:, 1:, ...], synth[:, 1:, ...]
+    B, T, H, W, V = train_var.shape
+
+    accumulator = PsdAccumulator(H, W, V)
+    n_splits = int(np.ceil(B / batch_size))
+    
+    for batch_synth, batch_train in zip(np.array_split(synth_var, n_splits), np.array_split(train_var, n_splits)):
+        accumulator.update(batch_synth, batch_train)
+        
+    results = accumulator.results()
+    
+    # We only care about the right half of the PSD graph (high frequencies / fine details)
+    midpoint = len(results['k_wavenumbers']) // 2
+    
+    # Analyze U (1) and V (2) wind channels
+    hf_ratios = []
+    for v in [1, 2]: 
+        pred_hf_power = np.sum(results['psd_pred'][v][midpoint:])
+        true_hf_power = np.sum(results['psd_true'][v][midpoint:])
+        # Ratio of predicted energy to real energy
+        hf_ratios.append(pred_hf_power / (true_hf_power + 1e-8))
+
+    return np.mean(hf_ratios)
+
+
 def get_mslp_err(train, synth):
     true_mslp = np.min(train[..., 0], axis=(2,3))
     pred_mslp = np.min(synth[..., 0], axis=(2,3))
@@ -95,6 +230,52 @@ def get_rmse(train, synth, batch_size=64):
     for batch_synth, batch_train in zip(np.array_split(synth, n_splits), np.array_split(train, n_splits)):
         accumulator.update(batch_synth, batch_train)
     return accumulator.results()
+
+
+def get_synoptic_acc(train, synth, sigma=1.5):
+    """
+    Calculates ACC after applying a spatial Gaussian filter.
+    This removes the 'Double Penalty' for sharp, slightly offset features,
+    allowing a fair spatial comparison against blurry autoregressive models.
+    """
+    if train.ndim == 4:
+        train = np.expand_dims(train, -1)
+        synth = np.expand_dims(synth, -1)
+        
+    t_true = train[:, 1:, ...]
+    t_pred = synth[:, 1:, ...]
+
+    # Apply spatial blur (sigma) over the Height and Width axes (axes 2 and 3)
+    # We loop through the batch and time to avoid blurring across independent frames
+    B, T, H, W, C = t_true.shape
+    t_true_blurred = np.zeros_like(t_true)
+    t_pred_blurred = np.zeros_like(t_pred)
+    
+    for b in range(B):
+        for t in range(T):
+            for c in range(C):
+                t_true_blurred[b, t, :, :, c] = gaussian_filter(t_true[b, t, :, :, c], sigma=sigma)
+                t_pred_blurred[b, t, :, :, c] = gaussian_filter(t_pred[b, t, :, :, c], sigma=sigma)
+
+    # 1. Calculate spatial means
+    true_mean = np.mean(t_true_blurred, axis=(2, 3), keepdims=True)
+    pred_mean = np.mean(t_pred_blurred, axis=(2, 3), keepdims=True)
+
+    # 2. Calculate spatial anomalies
+    true_anom = t_true_blurred - true_mean
+    pred_anom = t_pred_blurred - pred_mean
+
+    # 3. Calculate Covariance & Variances
+    numerator = np.sum(true_anom * pred_anom, axis=(2, 3))
+    true_var = np.sum(true_anom**2, axis=(2, 3))
+    pred_var = np.sum(pred_anom**2, axis=(2, 3))
+    
+    denominator = np.sqrt(true_var * pred_var)
+
+    # 4. Calculate ACC 
+    acc = numerator / (denominator + 1e-8)
+
+    return np.mean(acc, axis=0)
 
 
 def get_acc(train, synth):
@@ -373,7 +554,21 @@ print('synth max:', synth['data'].max(axis=(0,1,2,3)))
 # print('fvd', fvdb, 'kvd', kvdb)
 
 
-
+###### Integrated Kinetic Energy (IKE)
+####### Advanced Physical Evaluation
+if variable == 'multivar':
+    ike_err_mid, ike_err_strong = get_tiered_ike_err(train['data'], synth['data'])
+    print(f"Integrated Kinetic Energy Error (Mid): {ike_err_mid:.2f}")
+    print(f"Integrated Kinetic Energy Error (Strong): {ike_err_strong:.2f}")
+    
+    vort_err = get_vorticity_err(train['data'], synth['data'])
+    print(f"Peak Relative Vorticity Error: {vort_err:.4f}")
+    
+    rmw_err = get_rmw_err(train['data'], synth['data'])
+    print(f"Radius of Max Winds Error (Grid Cells): {rmw_err:.2f}")
+    
+    hf_ratio = get_hf_spectral_ratio(train['data'], synth['data'])
+    print(f"High-Frequency Spectral Ratio: {hf_ratio:.4f} (1.0 is perfect)")
 
 ####### FVD / KVD
 print('computing FVD, KVD for train vs synth')
@@ -398,7 +593,18 @@ print('mslp error', mslp_err)
 
 
 ####### ACC (Anomaly Correlation Coefficient)
-print('computing Spatial ACC')
+print('computing Synoptic spatial ACC')
+acc_results = get_synoptic_acc(train_match['data'], synth['data'])
+
+# Print the final timestep ACC for each variable
+print(f"Final Frame (T={acc_results.shape[0]}) ACC Breakdown:")
+if variable == 'multivar':
+    for v_idx, v_name in enumerate(channel_names):
+        print(f"  {v_name.upper()} ACC: {acc_results[-1, v_idx]:.4f}")
+else:
+    print(f"  {variable.upper()} ACC: {acc_results[-1, 0]:.4f}")
+
+
 acc_results = get_acc(train_match['data'], synth['data'])
 
 # Print the final timestep ACC for each variable
