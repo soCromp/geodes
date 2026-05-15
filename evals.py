@@ -4,7 +4,7 @@ import sys
 from utils.video_metrics import compute_fvd, compute_kvd
 from utils.forecast_metrics import RmseAccumulator, PsdAccumulator
 import random
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, uniform_filter
 
 from matplotlib import pyplot as plt
 plt.rcParams.update({'font.size': 12})
@@ -58,6 +58,80 @@ def load_data(path):
                 point.append(np.load(os.path.join(path, d, f'{i}.npy')).squeeze())
             data.append(np.stack(point, axis=0))
     return {'names': names, 'data': np.stack(data, axis = 0)}
+
+
+def get_frequency_bias(train, synth, threshold=20.0):
+    """
+    Calculates the Frequency Bias Index (FBI).
+    FBI = (Total Forecasted Pixels > Threshold) / (Total True Pixels > Threshold)
+    1.0 is perfect. >1 means over-forecasting (hallucinations). <1 means under-forecasting.
+    """
+    train_wind = np.sqrt(train[:, -1, :, :, 1]**2 + train[:, -1, :, :, 2]**2)
+    synth_wind = np.sqrt(synth[:, -1, :, :, 1]**2 + synth[:, -1, :, :, 2]**2)
+
+    # Count total number of pixels exceeding the physical threshold across the whole batch
+    train_hits = np.sum(train_wind >= threshold)
+    synth_hits = np.sum(synth_wind >= threshold)
+
+    # Calculate ratio (Add epsilon to prevent division by zero)
+    fbi = synth_hits / (train_hits + 1e-8)
+    
+    return fbi
+
+
+def get_fss_err(train, synth, threshold=20.0, window_size=3):
+    """
+    Calculates the Fractions Skill Score (FSS) for wind speed.
+    window_size: The neighborhood size (e.g., 3x3 grid cells).
+    threshold: The physical intensity cutoff (e.g., 20 m/s).
+    """
+    # Extract final timestep U and V components and calculate magnitude
+    train_wind = np.sqrt(train[:, -1, :, :, 1]**2 + train[:, -1, :, :, 2]**2)
+    synth_wind = np.sqrt(synth[:, -1, :, :, 1]**2 + synth[:, -1, :, :, 2]**2)
+
+    # 1. Convert to binary event fields based on the physical threshold
+    train_binary = (train_wind >= threshold).astype(float)
+    synth_binary = (synth_wind >= threshold).astype(float)
+
+    # 2. Calculate spatial fractions using a fast uniform filter (neighborhood mean)
+    train_frac = uniform_filter(train_binary, size=window_size, mode='constant')
+    synth_frac = uniform_filter(synth_binary, size=window_size, mode='constant')
+
+    # 3. Compute Mean Squared Error of the fractions
+    mse_frac = np.mean((train_frac - synth_frac)**2, axis=(1, 2))
+    
+    # 4. Compute the reference worst-case MSE (if predictions and truth never overlap)
+    ref_mse = np.mean(train_frac**2 + synth_frac**2, axis=(1, 2))
+
+    # 5. Calculate FSS (Add epsilon to prevent division by zero if no events occur)
+    fss = 1.0 - (mse_frac / (ref_mse + 1e-8))
+
+    return np.mean(fss)
+
+
+def get_centroid_track_err(train, synth):
+    """
+    Calculates the Euclidean distance (in grid cells) between the true 
+    storm center (minimum SLP) and the predicted storm center at T=final.
+    """
+    # Channel 0 is Sea Level Pressure
+    train_slp = train[:, -1, :, :, 0]
+    synth_slp = synth[:, -1, :, :, 0]
+
+    B, H, W = train_slp.shape
+    track_errors = []
+
+    for b in range(B):
+        # Unravel the index of the absolute lowest pressure pixel
+        t_y, t_x = np.unravel_index(np.argmin(train_slp[b]), (H, W))
+        s_y, s_x = np.unravel_index(np.argmin(synth_slp[b]), (H, W))
+
+        # Calculate Euclidean distance
+        distance = np.sqrt((t_y - s_y)**2 + (t_x - s_x)**2)
+        track_errors.append(distance)
+
+    # Return the mean track error across the batch
+    return np.mean(track_errors)
 
 
 def get_ike_err(train, synth, threshold=17.0):
@@ -554,27 +628,12 @@ print('synth max:', synth['data'].max(axis=(0,1,2,3)))
 # print('fvd', fvdb, 'kvd', kvdb)
 
 
-###### Integrated Kinetic Energy (IKE)
-####### Advanced Physical Evaluation
-if variable == 'multivar':
-    ike_err_mid, ike_err_strong = get_tiered_ike_err(train['data'], synth['data'])
-    print(f"Integrated Kinetic Energy Error (Mid): {ike_err_mid:.2f}")
-    print(f"Integrated Kinetic Energy Error (Strong): {ike_err_strong:.2f}")
-    
-    vort_err = get_vorticity_err(train['data'], synth['data'])
-    print(f"Peak Relative Vorticity Error: {vort_err:.4f}")
-    
-    rmw_err = get_rmw_err(train['data'], synth['data'])
-    print(f"Radius of Max Winds Error (Grid Cells): {rmw_err:.2f}")
-    
-    hf_ratio = get_hf_spectral_ratio(train['data'], synth['data'])
-    print(f"High-Frequency Spectral Ratio: {hf_ratio:.4f} (1.0 is perfect)")
 
-####### FVD / KVD
-print('computing FVD, KVD for train vs synth')
-fvd, encoder = get_fvd(train['data'], synth['data'])
-kvd = get_kvd(train['data'], synth['data'], encoder=encoder)
-print('fvd', fvd, 'kvd', kvd)
+# ####### FVD / KVD
+# print('computing FVD, KVD for train vs synth')
+# fvd, encoder = get_fvd(train['data'], synth['data'])
+# kvd = get_kvd(train['data'], synth['data'], encoder=encoder)
+# print('fvd', fvd, 'kvd', kvd)
 
 ###### RMSE (requires at least some data points to match up)
 train_match_data = []
@@ -585,6 +644,29 @@ train_match = {'names': synth['names'], 'data': np.stack(train_match_data, axis=
 rmse = get_rmse(train_match['data'], synth['data'])
 print('rmse', rmse)
 
+print('Frequency bias', get_frequency_bias(train_match['data'], synth['data']))
+
+fss_err = get_fss_err(train_match['data'], synth['data'])
+print('FSS error', fss_err)
+
+centroid_track_err = get_centroid_track_err(train_match['data'], synth['data'])
+print('Centroid track error', centroid_track_err)
+
+####### Physical Evaluation
+if variable == 'multivar':
+    ike_err_mid, ike_err_strong = get_tiered_ike_err(train_match['data'], synth['data'])
+    print(f"Integrated Kinetic Energy Error (Mid): {ike_err_mid:.2f}")
+    print(f"Integrated Kinetic Energy Error (Strong): {ike_err_strong:.2f}")
+    
+    vort_err = get_vorticity_err(train_match['data'], synth['data'])
+    print(f"Peak Relative Vorticity Error: {vort_err:.4f}")
+    
+    rmw_err = get_rmw_err(train_match['data'], synth['data'])
+    print(f"Radius of Max Winds Error (Grid Cells): {rmw_err:.2f}")
+    
+    hf_ratio = get_hf_spectral_ratio(train_match['data'], synth['data'])
+    print(f"High-Frequency Spectral Ratio: {hf_ratio:.4f} (1.0 is perfect)")
+
 
 ####### MSLP error 
 print('computing MSLP error')
@@ -593,17 +675,18 @@ print('mslp error', mslp_err)
 
 
 ####### ACC (Anomaly Correlation Coefficient)
-print('computing Synoptic spatial ACC')
+# print('computing Synoptic spatial ACC')
 acc_results = get_synoptic_acc(train_match['data'], synth['data'])
 
 # Print the final timestep ACC for each variable
-print(f"Final Frame (T={acc_results.shape[0]}) ACC Breakdown:")
+print(f"Final Frame (T={acc_results.shape[0]}) Synoptic ACC Breakdown:")
 if variable == 'multivar':
     for v_idx, v_name in enumerate(channel_names):
         print(f"  {v_name.upper()} ACC: {acc_results[-1, v_idx]:.4f}")
 else:
     print(f"  {variable.upper()} ACC: {acc_results[-1, 0]:.4f}")
-
+print('avg synoptic ACC T=final:', acc_results[-1].mean())
+print('avg synoptic ACC:        ', acc_results.mean())
 
 acc_results = get_acc(train_match['data'], synth['data'])
 
@@ -614,7 +697,8 @@ if variable == 'multivar':
         print(f"  {v_name.upper()} ACC: {acc_results[-1, v_idx]:.4f}")
 else:
     print(f"  {variable.upper()} ACC: {acc_results[-1, 0]:.4f}")
-
+print('avg ACC T=final:', acc_results[-1].mean())
+print('avg ACC:        ', acc_results.mean())
 
 if variable == 'multivar':
     windmag_train = np.sqrt(train['data'][..., 1]**2 + train['data'][..., 2]**2)
