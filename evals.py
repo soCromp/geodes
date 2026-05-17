@@ -57,7 +57,10 @@ def load_data(path):
             for i in range(len_datapoint):
                 point.append(np.load(os.path.join(path, d, f'{i}.npy')).squeeze())
             data.append(np.stack(point, axis=0))
-    return {'names': names, 'data': np.stack(data, axis = 0)}
+    data = np.stack(data, axis = 0)
+    if len(channel_names) == 1:
+        data = np.expand_dims(data, axis=-1)
+    return {'names': names, 'data': data}
 
 
 def get_frequency_bias(train, synth, threshold=20.0):
@@ -66,8 +69,12 @@ def get_frequency_bias(train, synth, threshold=20.0):
     FBI = (Total Forecasted Pixels > Threshold) / (Total True Pixels > Threshold)
     1.0 is perfect. >1 means over-forecasting (hallucinations). <1 means under-forecasting.
     """
-    train_wind = np.sqrt(train[:, -1, :, :, 1]**2 + train[:, -1, :, :, 2]**2)
-    synth_wind = np.sqrt(synth[:, -1, :, :, 1]**2 + synth[:, -1, :, :, 2]**2)
+    if len(channel_names) == 1:
+        train_wind = train[:, -1, :, :, 0]
+        synth_wind = synth[:, -1, :, :, 0]
+    else:
+        train_wind = np.sqrt(train[:, -1, :, :, 1]**2 + train[:, -1, :, :, 2]**2)
+        synth_wind = np.sqrt(synth[:, -1, :, :, 1]**2 + synth[:, -1, :, :, 2]**2)
 
     # Count total number of pixels exceeding the physical threshold across the whole batch
     train_hits = np.sum(train_wind >= threshold)
@@ -86,8 +93,12 @@ def get_fss_err(train, synth, threshold=20.0, window_size=3):
     threshold: The physical intensity cutoff (e.g., 20 m/s).
     """
     # Extract final timestep U and V components and calculate magnitude
-    train_wind = np.sqrt(train[:, -1, :, :, 1]**2 + train[:, -1, :, :, 2]**2)
-    synth_wind = np.sqrt(synth[:, -1, :, :, 1]**2 + synth[:, -1, :, :, 2]**2)
+    if len(channel_names) == 1:
+        train_wind = train[:, -1, :, :, 0]
+        synth_wind = synth[:, -1, :, :, 0]
+    else:
+        train_wind = np.sqrt(train[:, -1, :, :, 1]**2 + train[:, -1, :, :, 2]**2)
+        synth_wind = np.sqrt(synth[:, -1, :, :, 1]**2 + synth[:, -1, :, :, 2]**2)
 
     # 1. Convert to binary event fields based on the physical threshold
     train_binary = (train_wind >= threshold).astype(float)
