@@ -12,7 +12,7 @@ from scipy.ndimage import gaussian_filter, uniform_filter
 from matplotlib import pyplot as plt
 plt.rcParams.update({'font.size': 12})
 
-extreme = True
+extreme = False
 suffix = '-extreme' if extreme else ''
 
 train_path = sys.argv[1] 
@@ -67,6 +67,37 @@ def load_data(path):
     if len(channel_names) == 1:
         data = np.expand_dims(data, axis=-1)
     return {'names': names, 'data': data}
+
+
+def interpolate_nans_1d(arr):
+    """
+    Interpolates NaN values in a 1D array.
+    Leaves the array unchanged if it's all NaNs or has no NaNs.
+    """
+    nans = np.isnan(arr)
+    
+    # If there are no NaNs, return the array as-is
+    if not nans.any():
+        return arr
+        
+    # If the ENTIRE slice is NaNs, we can't interpolate. 
+    # Return as-is (or you could return zeros depending on your needs)
+    if nans.all():
+        return arr 
+
+    # Get the indices of the NaNs (the "x" coordinates we want to evaluate)
+    x_evaluate = np.where(nans)[0]
+    
+    # Get the indices of the valid data (the "x" coordinates we know)
+    x_known = np.where(~nans)[0]
+    
+    # Get the actual valid values (the "y" coordinates we know)
+    y_known = arr[~nans]
+    
+    # Perform linear interpolation
+    arr[nans] = np.interp(x_evaluate, x_known, y_known)
+    
+    return arr
 
 
 def get_frequency_bias(train, synth, threshold=20.0):
@@ -611,6 +642,7 @@ def plot_eye_wobble(train_data, synth_data):
     
 
 train = load_data(train_path)
+train['data'] = np.apply_along_axis(interpolate_nans_1d, axis=1, arr=train['data']) # 1 is time dim
 synth = load_data(synth_path)
 
 if synth['data'].shape[2] == len(channel_names):
@@ -618,6 +650,7 @@ if synth['data'].shape[2] == len(channel_names):
 
 print('Raw Data Loaded:')
 print('train', train['data'].shape, 'synth', synth['data'].shape)
+print(np.isnan(train['data']).sum())
 print('train min:', train['data'].min(axis=(0,1,2,3)))
 print('synth min:', synth['data'].min(axis=(0,1,2,3)))
 
