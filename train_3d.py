@@ -74,6 +74,8 @@ def get_args():
                         help='Sampling temperature. 0.0 is deterministic, 1.0 is fully stochastic')
     parser.add_argument('--no_sample_clip', action="store_false", default=True, dest='clip_sample',
                         help='if passed, disables clipping noisy sample to [-1,1] at each step during sampling')
+    parser.add_argument('--resample_steps', type=int, default=1, 
+                        help='Number of Repaint resampling loops per timestep. 1 is standard geoDES sampling.')
     args = parser.parse_args()
     return args
 
@@ -219,18 +221,60 @@ class CondDiffusionPipeline(DiffusionPipeline):
         sample = noise.clone()
         prompt = input.to(device=device, dtype=config['dtype'])
         
+        # Grab the resample hyperparameter (default to 1)
+        resample_steps = kwargs.get('resample_steps', 1)
+        
         for i, t in enumerate(self.scheduler.timesteps):
-            eps = self.unet(sample, t, encoder_hidden_states=encoder_hidden_states).sample
-            sample = self.scheduler.step(eps, t, sample, eta=kwargs.get('eta', 0.0), generator=generator).prev_sample
-            t_prev = self.scheduler.timesteps[i+1] if i+1 < len(self.scheduler.timesteps) else t
-            # z = torch.randn((batch_size, self.unet.config['in_channels'], config['image_size'], config['image_size']), 
-            #                 device=device, dtype=config['dtype'], generator=generator)
+            t_prev = self.scheduler.timesteps[i+1] if i+1 < len(self.scheduler.timesteps) else torch.tensor(0, device=device)
             
-            # put the prompt back in
-            z = noise[:, :, 0, :, :]
-            sample[:, :, 0, :, :] = self.scheduler.add_noise(prompt, z, t_prev)
+            for u in range(resample_steps):
+                # 1. Denoise from t -> t_prev
+                eps = self.unet(sample, t, encoder_hidden_states=encoder_hidden_states).sample
+                pred = self.scheduler.step(eps, t, sample, eta=kwargs.get('eta', 0.0), generator=generator)
+                sample_t_prev = pred.prev_sample
+                
+                # 2. Overwrite frame 0 with mathematically perfect noise at t_prev
+                z = noise[:, :, 0, :, :]
+                if t_prev > 0:
+                    prompt_t_prev = self.scheduler.add_noise(prompt, z, t_prev)
+                else:
+                    prompt_t_prev = prompt
+                
+                sample_t_prev[:, :, 0, :, :] = prompt_t_prev
+                
+                # 3. Resampling: If not the last loop, jump back in time to t
+                if u < resample_steps - 1 and t_prev > 0:
+                    # Get the model's current best guess of the fully clean video
+                    x0_guess = pred.pred_original_sample if hasattr(pred, 'pred_original_sample') else sample_t_prev
+                    
+                    jump_noise = torch.empty_like(sample_t_prev)
+                    jump_noise[:, :, 0, :, :] = z # Anchor strictly to Frame 0's original noise
+                    
+                    rho = config.get('correlated_noise', 0.0)
+                    if rho > 0:
+                        s = math.sqrt(1.0 - rho * rho)
+                        for f in range(1, num_frames):
+                            # Generate safe independent noise for the step
+                            step_noise = torch.randn(
+                                jump_noise[:, :, f].shape, 
+                                device=device, dtype=config['dtype'], generator=generator
+                            )
+                            # Apply the temporal correlation formula
+                            jump_noise[:, :, f, :, :] = rho * jump_noise[:, :, f-1, :, :] + s * step_noise
+                    else:
+                        for f in range(1, num_frames):
+                            jump_noise[:, :, f, :, :] = torch.randn(
+                                jump_noise[:, :, f].shape, 
+                                device=device, dtype=config['dtype'], generator=generator
+                            )
+                    
+                    # Add this perfectly correlated noise to jump back to timestep t
+                    sample = self.scheduler.add_noise(x0_guess, jump_noise, t)
+                    
+                    # Enforce the perfect frame 0 at timestep t (Redundant now, but mathematically safe)
+                    sample[:, :, 0, :, :] = self.scheduler.add_noise(prompt, z, t)
             
-        # clean prompt
+        # Clean prompt enforcement at the very end
         sample[:, :, 0, :, :] = prompt
         return {"images": sample.cpu()}
  
@@ -427,18 +471,33 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, val_
         
 def sample_loop(config, model, noise_scheduler, dataloader):
     os.makedirs(os.path.join(config['checkpoint_dir'], config['name'], 'samples'), exist_ok=True)
+    model.eval()
     pipeline = CondDiffusionPipeline(unet=model.cuda(), scheduler=noise_scheduler)
     generator = torch.Generator(device='cuda').manual_seed(config['seed'])
+    
     for batch in tqdm(dataloader):
         prompt = batch['pixel_values'][:, :, 0, :, :]
         prompt_batch_size = prompt.shape[0] # final batch may be smaller
-        images = pipeline(
-            torch.as_tensor(prompt, dtype=config['dtype'], device='cuda'),
-            num_frames=config['frames'],
-            generator=generator, 
-            encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda'),
-            eta=config['eta'],
-        )['images']
+        
+        if config['frames'] == 8:
+            images = pipeline(
+                torch.as_tensor(prompt, dtype=config['dtype'], device='cuda'),
+                num_frames=config['frames'],
+                generator=generator, 
+                encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda'),
+                eta=config['eta'],
+                resample_steps=config['resample_steps'],
+            )['images']
+        else:
+            with torch.backends.cuda.sdp_kernel(enable_flash=False, enable_mem_efficient=True, enable_math=False):
+                images = pipeline(
+                    torch.as_tensor(prompt, dtype=config['dtype'], device='cuda'),
+                    num_frames=config['frames'],
+                    generator=generator, 
+                    encoder_hidden_states=torch.zeros((prompt_batch_size, 1, cross_attention_dim), device='cuda'),
+                    eta=config['eta'],
+                    resample_steps=config['resample_steps'],
+                )['images']
         
         # # output from model is on [-1,1] log scale
         images = dataset.denormalize(images.cpu().numpy()) # returns B T H W C
